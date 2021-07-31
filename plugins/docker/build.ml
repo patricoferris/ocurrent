@@ -16,7 +16,7 @@ let use_pool pool f =
 
 module Key = struct
   type t = {
-    commit : [ `No_context | `Git of Current_git.Commit.t ];
+    commit : [ `No_context | `Git of Current_git.Commit.t | `Dir of Fpath.t ];
     dockerfile : [`File of Fpath.t | `Contents of string];
     docker_context : string option;
     squash : bool;
@@ -29,6 +29,7 @@ module Key = struct
 
   let source_to_json = function
     | `No_context -> `Null
+    | `Dir path -> `String (Fpath.to_string path)
     | `Git commit -> `String (Current_git.Commit.hash commit)
 
   let to_json { commit; dockerfile; docker_context; squash; build_args } =
@@ -55,9 +56,19 @@ let or_raise = function
   | Ok () -> ()
   | Error (`Msg m) -> raise (Failure m)
 
+let rec last = function
+  | [] -> assert false 
+  | [ x ] -> x
+  | _::xs -> last xs
+
 let with_context ~job context fn =
   match context with
   | `No_context -> Current.Process.with_tmpdir ~prefix:"build-context-" fn
+  | `Dir path ->
+    let last = Fpath.segs path |> last in 
+     Current.Process.with_tmpdir ~prefix:"build-context-" @@ fun dir -> 
+     Current.Process.exec ~cancellable:true ~job ("", [| "cp"; "-a"; Fpath.to_string path; Fpath.(dir / last |> to_string) |]) >>= fun _ ->
+      fn dir
   | `Git commit -> Current_git.with_checkout ~job commit fn
 
 let build { pull; pool; timeout } job key =
