@@ -35,11 +35,9 @@ let cmd_update = cmd ["up"; "-d"]
 
 let publish { pull } job key {Value.contents} =
   Current.Job.start job ~level:Current.Level.Dangerous >>= fun () ->
-  let p =
-    if pull then Current.Process.exec ~stdin:contents ~cancellable:true ~job (cmd_pull key)
-    else Lwt.return (Ok ())
-  in
-  p >>= function
+  (if pull then Current.Process.exec ~stdin:contents ~cancellable:true ~job (cmd_pull key)
+  else Lwt.return (Ok ()))
+  >>= function
   | Error _ as e -> Lwt.return e
   | Ok () -> Current.Process.exec ~stdin:contents ~cancellable:true ~job (cmd_update key)
 
