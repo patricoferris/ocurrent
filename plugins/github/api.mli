@@ -113,6 +113,8 @@ type token = {
       If [None], [token] does not expire. *)
 }
 
+val token : t -> (string, [`Msg of string]) result
+
 val get_token : t -> (string, [`Msg of string]) result Lwt.t
 (** [get_token t] returns the cached token for [t], or fetches a new one if it has expired. *)
 

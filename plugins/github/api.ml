@@ -375,6 +375,8 @@ and refs = {
 
 let webhook_secret t = t.webhook_secret
 
+let token t = t.token.token
+
 let default_ref t = t.default_ref
 
 let all_refs t = t.all_refs
@@ -385,8 +387,10 @@ let v ~get_token ?app_id ~account ~webhook_secret () =
   { get_token; token_lock; token = no_token; monitors; account; app_id; webhook_secret }
 
 let of_oauth ~token ~webhook_secret =
-  let get_token () = Lwt.return { token = Ok token; expiry = None} in
-  v ~get_token ~account:"oauth" ~webhook_secret ()
+  let token = { token = Ok token; expiry = None} in
+  let get_token () = Lwt.return token in
+  let t = v ~get_token ~account:"oauth" ~webhook_secret () in
+  { t with token = token }
 
 let get_token t =
   Lwt_mutex.with_lock t.token_lock @@ fun () ->

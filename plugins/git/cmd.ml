@@ -24,6 +24,19 @@ let local_copy repo =
   let repos_dir = Current.state_dir "git" in
   Fpath.append repos_dir (Fpath.v (id_of_repo repo))
 
+let remove_access_tokens s =
+  match Astring.String.cut ~sep:"https://x-access-token:" s with
+  | Some ("", x) -> (
+    match Astring.String.cut ~sep:"@" x with
+      | Some (token, rest) -> "https://<token>" ^ rest
+      | None -> s
+  )
+  | None -> s
+
+let pp_cmd ppf (v, args) =
+  let args' = Array.map remove_access_tokens args in
+  Current.Process.pp_cmd ppf (v, args')
+
 let git ~cancellable ~job ?cwd args =
   let args =
     match cwd with
@@ -31,7 +44,7 @@ let git ~cancellable ~job ?cwd args =
     | Some cwd -> "-C" :: Fpath.to_string cwd :: args
   in
   let cmd = Array.of_list ("git" :: args) in
-  Current.Process.exec ~cancellable ~job ("", cmd)
+  Current.Process.exec ~pp_cmd ~cancellable ~job ("", cmd)
 
 let git_clone ~cancellable ~job ~src dst =
   git ~cancellable ~job ["clone"; "--recursive"; "-q"; src; Fpath.to_string dst]
