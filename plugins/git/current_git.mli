@@ -39,10 +39,10 @@ module Commit : sig
   val unmarshal : string -> t
 end
 
-val clone : schedule:Current_cache.Schedule.t -> ?gref:string -> string -> Commit.t Current.t
+val clone : schedule:Current_cache.Schedule.t -> ?token:string -> ?gref:string -> string -> Commit.t Current.t
 (** [clone ~schedule ~gref uri] evaluates to the head commit of [uri]'s [gref] branch (default: "master"). *)
 
-val fetch : Commit_id.t Current.t -> Commit.t Current.t
+val fetch : ?token:string -> Commit_id.t Current.t -> Commit.t Current.t
 
 val with_checkout :
   ?pool:unit Current.Pool.t ->

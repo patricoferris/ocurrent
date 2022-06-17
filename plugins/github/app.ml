@@ -88,7 +88,7 @@ let get_token app iid =
   let token = Ok (json |> member "token" |> to_string) in
   (* The token is valid for 60 minutes, so request a new one after 50 minutes. *)
   let expiry = Some (now +. 50.0 *. minute) in
-  Api.{ token; expiry }
+  { Api.token; expiry }
 
 let next headers =
   headers
