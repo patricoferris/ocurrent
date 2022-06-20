@@ -179,7 +179,7 @@ let installations t =
 let make_config app_id private_key_file allowlist webhook_secret_file =
   let allowlist = Allowlist.of_list allowlist in
   let data = Api.read_file private_key_file in
-  let webhook_secret = Api.read_file webhook_secret_file in
+  let webhook_secret = String.trim (Api.read_file webhook_secret_file) in
   match X509.Private_key.decode_pem (Cstruct.of_string data) with
     | Error (`Msg msg) -> Fmt.failwith "Failed to parse secret key!@ %s" msg
     | Ok (`RSA key) ->
