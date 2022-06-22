@@ -71,6 +71,10 @@ let render_nav_link (link_label, path) =
 
 let template t ?refresh contents =
   let site = t.site in
+  let custom_css = match site.custom_css with
+    | Some css -> [ Tyxml.Html.link ~rel:[ `Stylesheet ] ~href:("/css/" ^ css) () ]
+    | None -> []
+  in
   let open Tyxml.Html in
   html_to_string (
     html
@@ -80,6 +84,7 @@ let template t ?refresh contents =
             link ~rel:[ `Stylesheet ] ~href:"/css/ansi.css" ();
             link ~rel:[ `Stylesheet ] ~href:"/css/style.css" ();
             link ~rel:[ `Icon ] ~href:img_dashboard_logo ();
+          ] @ custom_css @ [
             meta ~a:[a_charset "UTF-8"] ();
           ] in
           match refresh with

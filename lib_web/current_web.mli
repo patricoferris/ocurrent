@@ -46,12 +46,14 @@ module Site : sig
     ?name:string ->
     ?authn:(csrf:string -> Uri.t) ->
     ?secure_cookies:bool ->
+    ?custom_css:string ->
     has_role:(User.t option -> Role.t -> bool) ->
     raw_resource Routes.route list -> t
   (** [v ~name ~authn ~has_role routes] is a site named [name] (used for the HTML title, etc)
       that uses [authn] to authenticate users and [has_role] to control what they can do.
       @param authn A link to a login page.
-      @param secure_cookies Set secure cookie attribute (turn on if public site uses https). *)
+      @param secure_cookies Set secure cookie attribute (turn on if public site uses https).
+      @param custom_css Optionally load a ["/css/<custom_css>"] file into the base template. *)
 end
 
 module Context : sig
