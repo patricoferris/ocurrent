@@ -47,6 +47,7 @@ module Site : sig
     ?authn:(csrf:string -> Uri.t) ->
     ?secure_cookies:bool ->
     ?refresh_pipeline:int ->
+    ?custom_css:string ->
     has_role:(User.t option -> Role.t -> bool) ->
     raw_resource Routes.route list -> t
   (** [v ~name ~authn ~has_role routes] is a site named [name] (used for the HTML title, etc)
@@ -55,7 +56,7 @@ module Site : sig
       @param secure_cookies Set secure cookie attribute (turn on if public site uses https).
       @param refresh_pipeline Refresh the pipeline graphs and jobs page each
         [refresh_pipeline] seconds. Defaults to never.
-   *)
+      @param custom_css Optionally load a ["/css/<custom_css>"] file into the base template. *)
 end
 
 module Context : sig
