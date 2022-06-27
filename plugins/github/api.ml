@@ -376,8 +376,6 @@ and refs = {
 
 let webhook_secret t = t.webhook_secret
 
-let token t = t.token.token
-
 let default_ref t = t.default_ref
 
 let all_refs t = t.all_refs

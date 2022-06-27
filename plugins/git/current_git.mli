@@ -42,7 +42,7 @@ end
 val clone : schedule:Current_cache.Schedule.t -> ?token:string -> ?gref:string -> string -> Commit.t Current.t
 (** [clone ~schedule ~gref uri] evaluates to the head commit of [uri]'s [gref] branch (default: "master"). *)
 
-val fetch : ?token:string -> Commit_id.t Current.t -> Commit.t Current.t
+val fetch : ?token:(unit -> string Lwt.t) -> Commit_id.t Current.t -> Commit.t Current.t
 
 val with_checkout :
   ?pool:unit Current.Pool.t ->

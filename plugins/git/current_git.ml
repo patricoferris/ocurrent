@@ -13,7 +13,7 @@ let ( >>!= ) x f =
   | Error _ as e -> Lwt.return e
 
 module Fetch = struct
-  type t = { token : string option }
+  type t = { token : (unit -> string Lwt.t) option }
   module Key = Commit_id
   module Value = Commit
 
@@ -23,9 +23,12 @@ module Fetch = struct
     let { Commit_id.repo = remote_repo; gref; hash = _ } = key in
     let src =
       match token with
-      | Some token -> Clone.insert_token ~token remote_repo
-      | None -> remote_repo
+      | Some token ->
+        token () >|= fun token ->
+        Clone.insert_token ~token remote_repo
+      | None -> Lwt.return remote_repo
     in
+    src >>= fun src ->
     let level =
       if Commit_id.is_local key then Current.Level.Harmless
       else Current.Level.Mostly_harmless
