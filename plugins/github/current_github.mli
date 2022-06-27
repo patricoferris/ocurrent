@@ -47,7 +47,8 @@ module Api : sig
   val webhook_secret : t -> string
   (** Webhook secret to validate payloads from GitHub *)
 
-  val token : t -> (string, [`Msg of string]) result
+  val get_token : t -> (string, [`Msg of string]) result Lwt.t
+  (** Fetch the token *)
 
   type refs
   (** Reference information for the repository *)
