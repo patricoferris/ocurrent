@@ -138,6 +138,9 @@ module Api : sig
         @param staleness If given, commits older than this are excluded.
                          Note: the main branch commit is always included, even if stale. *)
 
+    val ci_tags : t Current.t -> Commit.t list Current.t
+    (** [ci_tags t] is like {! ci_refs} except it evaluates to a list of commits for the tags in [t]. *)
+
     val head_commit : t Current.t -> Commit.t Current.t
     (** [head_commit t] evaluates to the commit at the head of the default branch in [t]. *)
   end

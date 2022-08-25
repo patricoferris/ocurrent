@@ -67,6 +67,7 @@ val webhook_secret : t -> string
 val all_refs : refs -> Commit.t Ref_map.t
 val head_of : t -> Repo_id.t -> Ref.id -> Commit.t Current.t
 val ci_refs : ?staleness:Duration.t -> t -> Repo_id.t -> Commit.t list Current.t
+val ci_tags : t -> Repo_id.t -> Commit.t list Current.t
 val cmdliner : t Cmdliner.Term.t
 val cmdliner_opt : t option Cmdliner.Term.t
 val webhook_secret_file : string Cmdliner.Term.t
@@ -76,6 +77,7 @@ module Repo : sig
 
   val id : t -> Repo_id.t
   val ci_refs : ?staleness:Duration.t -> t Current.t -> Commit.t list Current.t
+  val ci_tags : t Current.t -> Commit.t list Current.t
   val head_commit : t Current.t -> Commit.t Current.t
   val pp : t Fmt.t
   val compare : t -> t -> int

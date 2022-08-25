@@ -102,6 +102,10 @@ module Metrics = struct
     let help = "Total number of monitored branches" in
     Gauge.v_labels ~label_names:["account"; "name"] ~help ~namespace ~subsystem "refs_total"
 
+  let tags_total =
+    let help = "Total number of monitored tags" in
+    Gauge.v_labels ~label_names:["account"; "name"] ~help ~namespace ~subsystem "tags_total"
+
   let prs_total =
     let help = "Total number of monitored PRs" in
     Gauge.v_labels ~label_names:["account"; "name"] ~help ~namespace ~subsystem "prs_total"
@@ -560,6 +564,15 @@ let head_commit t repo =
   let> () = Current.return () in
   Head_ref.get t repo
 
+let parse_ref ~owner ~repo ~prefix json =
+  let open Yojson.Safe.Util in
+  let node = json / "node" in
+  let name = node / "name" |> to_string in
+  let hash = node / "target" / "oid" |> to_string in
+  let committed_date = node / "target" / "committedDate" |> to_string in
+  let message = node / "target" / "message" |> to_string in
+  { Commit_id.owner; Commit_id.repo; id = `Ref (prefix ^ name); hash; committed_date; message }
+
 module Refs = Monitor(struct
   type result = refs
 
@@ -609,15 +622,6 @@ module Refs = Monitor(struct
     }
   |}
 
-  let parse_ref ~owner ~repo ~prefix json =
-    let open Yojson.Safe.Util in
-    let node = json / "node" in
-    let name = node / "name" |> to_string in
-    let hash = node / "target" / "oid" |> to_string in
-    let committed_date = node / "target" / "committedDate" |> to_string in
-    let message = node / "target" / "message" |> to_string in
-    { Commit_id.owner; Commit_id.repo; id = `Ref (prefix ^ name); hash; committed_date; message }
-
   let parse_pr ~owner ~repo json =
     let open Yojson.Safe.Util in
     let node = json / "node" in
@@ -657,7 +661,55 @@ module Refs = Monitor(struct
     |> fun all_refs -> { default_ref; all_refs }
 end)
 
+module Tags = Monitor(struct
+  type result = refs
+
+  let name = "tags"
+
+  let query = {|
+    repository(owner: $owner, name: $name) {
+      nameWithOwner
+      defaultBranchRef {
+        name
+      }
+      refs(first: 100, refPrefix:"refs/tags/") {
+        totalCount
+        edges {
+          node {
+            name
+            target {
+              ...on Commit {
+                oid
+                committedDate
+                message
+              }
+            }
+          }
+        }
+      }
+    }
+  |}
+
+  let of_yojson t { Repo_id.owner; name } data =
+    let open Yojson.Safe.Util in
+    let repo = data / "repository" in
+    let default_ref = repo / "defaultBranchRef" / "name" |> to_string |> ( ^ ) "refs/heads/" in
+    let refs =
+      repo / "refs" / "edges" |> to_list |> List.map (parse_ref ~owner ~repo:name ~prefix:"refs/tags/") in
+    (* TODO: use cursors to get all results.
+       For now, we just take the first 100 and warn if there are more. *)
+    let n_branches = repo / "refs" / "totalCount" |> to_int in
+    Prometheus.Gauge.set (Prometheus.Gauge.labels Metrics.tags_total [owner; name]) (float_of_int n_branches);
+    if List.length refs < n_branches then
+      Log.warn (fun f -> f "Too many tags in %s/%s (%d)" owner name n_branches);
+    let add xs map = List.fold_left (fun acc x -> Ref_map.add x.Commit_id.id (t, x) acc) map xs in
+    Ref_map.empty
+    |> add refs
+    |> fun all_refs -> { default_ref; all_refs }
+end)
+
 let refs t repo = Refs.get t repo
+let tags t repo = Tags.get t repo
 
 let to_ptime str =
   Ptime.of_rfc3339 str |> function
@@ -693,6 +745,14 @@ let ci_refs ?staleness t repo =
     refs t repo
   in
   to_ci_refs ?staleness refs
+
+let ci_tags t repo =
+  let+ refs =
+    Current.component "%a tags" Repo_id.pp repo |>
+    let> () = Current.return () in
+    tags t repo
+  in
+  to_ci_refs refs
 
 let head_of t repo (id: Ref.id) =
   Current.component "%a@,%a" Repo_id.pp repo Ref.pp_id id |>
@@ -932,6 +992,14 @@ module Repo = struct
       refs api repo
     in
     to_ci_refs ?staleness refs
+
+  let ci_tags t =
+    let+ refs =
+      Current.component "CI refs" |>
+      let> (api, repo) = t in
+      tags api repo
+    in
+    to_ci_refs refs
 end
 
 module Anonymous = struct
