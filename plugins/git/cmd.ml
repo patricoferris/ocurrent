@@ -1,5 +1,3 @@
-open Lwt.Infix
-
 let dir_exists d =
   match Bos.OS.Dir.exists d with
   | Ok x -> x
@@ -30,7 +28,7 @@ let git ~cancellable ~job ?cwd args =
     | None -> args
     | Some cwd -> "-C" :: Fpath.to_string cwd :: args
   in
-  let cmd = Array.of_list ("git" :: args) in
+  let cmd = ("git" :: args) in
   Current.Process.exec ~cancellable ~job ("", cmd)
 
 let git_clone ~cancellable ~job ~src dst =
@@ -52,10 +50,10 @@ let git_remote_set_url ~job ~repo ~remote url =
 
 let git_rev_parse ?(cancellable=false) ~job ~repo x =
   let cmd = ["git"; "-C"; Fpath.to_string repo; "rev-parse"; x] in
-  Current.Process.check_output ~cancellable ~job ("", Array.of_list cmd) >|= Stdlib.Result.map String.trim
+  Current.Process.check_output ~cancellable ~job ("", cmd) |> Stdlib.Result.map String.trim
 
 let cp_r ~cancellable ~job ~src ~dst =
-  let cmd = [| "cp"; "-a"; "--"; Fpath.to_string src; Fpath.to_string dst |] in
+  let cmd = [ "cp"; "-a"; "--"; Fpath.to_string src; Fpath.to_string dst ] in
   Current.Process.exec ~cancellable ~job ("", cmd)
 
 let git_submodule_sync ~cancellable ~job ~repo =

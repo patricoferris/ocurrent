@@ -1,5 +1,3 @@
-open Lwt.Infix
-
 type t = { pull : bool }
 
 let id = "docker-compose-cli"
@@ -35,13 +33,13 @@ let cmd_pull = cmd ["pull"]
 let cmd_update ({ Key.detach; _ } as key) = cmd ("up" :: if detach then ["-d"] else []) key
 
 let publish { pull } job key {Value.contents} =
-  Current.Job.start job ~level:Current.Level.Dangerous >>= fun () ->
-  let p =
+  Current.Job.start job ~level:Current.Level.Dangerous;
+  let p () =
     if pull then Current.Process.exec ~stdin:contents ~cancellable:true ~job (cmd_pull key)
-    else Lwt.return (Ok ())
+    else (Ok ())
   in
-  p >>= function
-  | Error _ as e -> Lwt.return e
+  match p () with
+  | Error _ as e -> e
   | Ok () -> Current.Process.exec ~stdin:contents ~cancellable:true ~job (cmd_update key)
 
 let pp f (key, { Value.contents }) =

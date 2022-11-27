@@ -1,8 +1,6 @@
-open Lwt.Infix
-
 type t = No_context
 
-let ( >>!= ) = Lwt_result.bind
+let ( >>!= ) = Result.bind
 
 module Key = struct
   type t = {
@@ -38,7 +36,7 @@ let get_digest_from_manifest manifest arch =
         (Yojson.Basic.pretty_print ~std:true) json
 
 let build No_context job key =
-  Current.Job.start job ~level:Current.Level.Mostly_harmless >>= fun () ->
+  Current.Job.start job ~level:Current.Level.Mostly_harmless;
   let { Key.docker_context; tag; arch } = key in
   match arch with
   | None -> begin
@@ -47,17 +45,17 @@ let build No_context job key =
       Current.Process.check_output ~cancellable:false ~job cmd >>!= fun id ->
       let id = String.trim id in
       Current.Job.log job "Pulled %S -> %S" tag id;
-      Lwt_result.return (Image.of_hash id)
+      Ok (Image.of_hash id)
     end
   | Some arch -> begin
       let cmd = Cmd.docker ~docker_context ["manifest"; "inspect"; tag ] in
       Current.Process.check_output ~cancellable:true ~job cmd >>!= fun manifest ->
       match get_digest_from_manifest manifest arch with
-      | Error _ as e -> Lwt.return e
+      | Error _ as e -> e
       | Ok hash ->
         let full_tag = tag ^ "@" ^ hash in
         Current.Process.exec ~cancellable:true ~job (Key.cmd {key with Key.tag=full_tag}) >>!= fun () ->
-        Lwt_result.return (Image.of_hash full_tag)
+        Ok (Image.of_hash full_tag)
     end
 
 let pp f key = Cmd.pp f (Key.cmd key)

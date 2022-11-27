@@ -1,8 +1,6 @@
-open Lwt.Infix
-
 type t = No_context
 
-let ( >>!= ) = Lwt_result.bind
+let ( >>!= ) = Result.bind
 
 module Key = struct
   type t = {
@@ -25,15 +23,15 @@ let repo_lock repo =
   match Repo_map.find_opt repo !repo_locks with
   | Some l -> l
   | None ->
-    let l = Lwt_mutex.create () in
+    let l = Eio.Mutex.create () in
     repo_locks := Repo_map.add repo l !repo_locks;
     l
 
 let id = "git-clone"
 
 let build No_context job { Key.repo; gref } =
-  Lwt_mutex.with_lock (repo_lock repo) @@ fun () ->
-  Current.Job.start job ~level:Current.Level.Mostly_harmless >>= fun () ->
+  Eio.Mutex.use_ro (repo_lock repo) @@ fun () ->
+  Current.Job.start job ~level:Current.Level.Mostly_harmless;
   let local_repo = Cmd.local_copy repo in
   (* Ensure we have a local clone of the repository. *)
   begin
@@ -43,7 +41,7 @@ let build No_context job { Key.repo; gref } =
   end >>!= fun () ->
   Cmd.git_rev_parse ~cancellable:true ~job ~repo:local_repo ("origin/" ^ gref) >>!= fun hash ->
   let id = { Commit_id.repo; gref; hash } in
-  Lwt.return @@ Ok { Commit.repo = local_repo; id }
+  Ok { Commit.repo = local_repo; id }
 
 let pp f key = Fmt.pf f "git clone %a" Key.pp key
 

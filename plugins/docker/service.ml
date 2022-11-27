@@ -1,5 +1,3 @@
-open Lwt.Infix
-
 type t = No_context
 
 let id = "docker-service"
@@ -30,7 +28,7 @@ let cmd { Key.name; docker_context } { Value.image } =
   Cmd.docker ~docker_context ["service"; "update"; "--image"; Image.hash image; name]
 
 let publish No_context job key value =
-  Current.Job.start job ~level:Current.Level.Dangerous >>= fun () ->
+  Current.Job.start job ~level:Current.Level.Dangerous;
   Current.Process.exec ~cancellable:true ~job (cmd key value)
 
 let pp f (key, value) =

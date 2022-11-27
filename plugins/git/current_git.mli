@@ -48,8 +48,8 @@ val with_checkout :
   ?pool:unit Current.Pool.t ->
   job:Current.Job.t ->
   Commit.t ->
-  (Fpath.t -> 'a Current.or_error Lwt.t) ->
-  'a Current.or_error Lwt.t
+  (Eio.Fs.dir Eio.Path.t -> 'a Current.or_error) ->
+  'a Current.or_error
 (** [with_checkout ~job c fn] clones [c] to a temporary directory and runs [fn tmpdir].
     When it returns, the directory is deleted.
     @param pool Used to prevent too many clones from happening at once. *)

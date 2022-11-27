@@ -8,7 +8,12 @@ module Default : S.DOCKER
 module Make (_ : S.HOST) : S.DOCKER
 (** The docker engine running on [Host]. *)
 
-val push_manifest : ?auth:(string * string) -> tag:string -> S.repo_id Current.t list -> S.repo_id Current.t
+val push_manifest :
+  ?auth:(string * string) ->
+  tag:string ->
+  fs:Eio.Fs.dir Eio.Path.t ->
+  sw:Eio.Switch.t ->
+  S.repo_id Current.t list -> S.repo_id Current.t
 (** [push_manifest images ~tag] pushes a manifest containing [images] as [tag].
     @param auth If give, do a "docker login" using this username/password pair before pushing. *)
 
@@ -24,12 +29,13 @@ module Raw : sig
   val pull :
     docker_context:string option ->
     schedule:Current_cache.Schedule.t ->
+    sw:Eio.Switch.t ->
     ?arch:string -> string -> Image.t Current.Primitive.t
 
   val peek :
     docker_context:string option ->
     schedule:Current_cache.Schedule.t ->
-    arch:string -> string -> S.repo_id Current.Primitive.t
+    arch:string -> sw:Eio.Switch.t -> string -> S.repo_id Current.Primitive.t
 
   val build :
     docker_context:string option ->
@@ -42,6 +48,8 @@ module Raw : sig
     ?pool:unit Current.Pool.t ->
     ?build_args:string list ->
     pull:bool ->
+    fs:Eio.Fs.dir Eio.Path.t ->
+    sw:Eio.Switch.t ->
     [ `Git of Current_git.Commit.t | `Dir of Fpath.t | `No_context ] ->
     Image.t Current.Primitive.t
 
@@ -50,6 +58,7 @@ module Raw : sig
     ?pool:unit Current.Pool.t ->
     ?run_args:string list ->
     Image.t -> args:string list ->
+    sw:Eio.Switch.t ->
     unit Current.Primitive.t
 
   val pread :
@@ -57,36 +66,40 @@ module Raw : sig
     ?pool:unit Current.Pool.t ->
     ?run_args:string list ->
     Image.t -> args:string list ->
+    sw:Eio.Switch.t ->
     string Current.Primitive.t
 
   val tag :
     docker_context:string option ->
-    tag:string -> Image.t -> unit Current.Primitive.t
+    tag:string ->
+    sw:Eio.Switch.t -> Image.t -> unit Current.Primitive.t
 
   val push :
     docker_context:string option ->
-    ?auth:(string * string) -> tag:string -> Image.t -> S.repo_id Current.Primitive.t
+    ?auth:(string * string) -> tag:string -> sw:Eio.Switch.t ->Image.t -> S.repo_id Current.Primitive.t
 
   val service :
     docker_context:string option ->
-    name:string -> image:Image.t -> unit -> unit Current.Primitive.t
+    name:string -> image:Image.t -> sw:Eio.Switch.t -> unit -> unit Current.Primitive.t
 
   val compose :
     ?pull:bool ->
     docker_context:string option ->
     name:string ->
-    contents:string -> unit -> unit Current.Primitive.t
+    contents:string ->
+    sw:Eio.Switch.t ->unit -> unit Current.Primitive.t
 
   val compose_cli :
     ?pull:bool ->
     docker_context:string option ->
     name:string ->
     detach:bool ->
-    contents:string -> unit -> unit Current.Primitive.t
+    contents:string ->
+    sw:Eio.Switch.t ->unit -> unit Current.Primitive.t
 
   (** Building Docker commands. *)
   module Cmd : sig
-    type t = Lwt_process.command
+    type t = Current.Process.command
 
     val docker : string list -> docker_context:string option -> t
     (** [docker ~docker_context args] is a command to run docker, with the "--context" argument added (if necessary).
@@ -97,8 +110,8 @@ module Raw : sig
       kill_on_cancel:bool ->
       job:Current.Job.t ->
       t ->
-      (string -> 'a Current.or_error Lwt.t) ->
-      'a Current.or_error Lwt.t
+      (string -> 'a Current.or_error) ->
+      'a Current.or_error
     (** [with_container ~kill_on_cancel ~job t fn] runs [t] to create a new
         container (the output is the container ID), then calls [fn id].
         When [fn] returns, it removes the container (killing it first if necessary).

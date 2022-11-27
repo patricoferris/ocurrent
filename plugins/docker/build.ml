@@ -1,11 +1,13 @@
-open Lwt.Infix
-
-type t = {
+type build = {
   pull : bool;
   pool : unit Current.Pool.t option;
   timeout : Duration.t option;
   level : Current.Level.t option;
 }
+
+type t = build * Eio.Fs.dir Eio.Path.t
+
+let (>>?=) = Result.bind
 
 let id = "docker-build"
 
@@ -59,17 +61,16 @@ let or_raise = function
   | Ok () -> ()
   | Error (`Msg m) -> raise (Failure m)
 
-let with_context ~job context fn =
-  let open Lwt_result.Infix in
+let with_context ~fs ~job context fn =
   match context with
-  | `No_context -> Current.Process.with_tmpdir ~prefix:"build-context-" fn
+  | `No_context -> Current.Process.with_tmpdir ~prefix:"build-context-" fs fn
   | `Dir path ->
-      Current.Process.with_tmpdir ~prefix:"build-context-" @@ fun dir ->
-      Current.Process.exec ~cwd:dir ~cancellable:true ~job ("", [| "rsync"; "-aHq"; Fpath.to_string path ^ "/"; "." |]) >>= fun () ->
+      Current.Process.with_tmpdir ~prefix:"build-context-" fs @@ fun dir ->
+      Current.Process.exec ~cwd:(Fpath.v @@ snd dir) ~cancellable:true ~job ("", [ "rsync"; "-aHq"; Fpath.to_string path ^ "/"; "." ]) >>?= fun () ->
       fn dir
   | `Git commit -> Current_git.with_checkout ~job commit fn
 
-let build { pull; pool; timeout; level } job key =
+let build ({ pull; pool; timeout; level }, fs) job key =
   let { Key.commit; docker_context; dockerfile; squash; build_args; path } = key in
   begin match dockerfile with
     | `Contents contents ->
@@ -77,35 +78,35 @@ let build { pull; pool; timeout; level } job key =
     | `File _ -> ()
   end;
   let level = Option.value level ~default:Current.Level.Average in
-  Current.Job.start ?timeout ?pool job ~level >>= fun () ->
-  with_context ~job commit @@ fun dir ->
+  Current.Job.start ?timeout ?pool job ~level;
+  with_context ~job ~fs commit @@ fun dir ->
   let dir = match path with
-    | Some path -> Fpath.(dir // path)
+    | Some path -> Eio.Path.(dir / Fpath.to_string path)
     | None -> dir
   in
   let file =
     match dockerfile with
     | `Contents contents ->
-      Bos.OS.File.write Fpath.(dir / "Dockerfile") (contents ^ "\n") |> or_raise;
+      Eio.Path.(save ~create:(`If_missing 0o644) (dir / "Dockerfile") (contents ^ "\n"));
       []
     | `File name ->
-      ["-f"; Fpath.(to_string (dir // name))]
+      ["-f"; (snd Eio.Path.(dir / Fpath.to_string name))]
   in
   let pull = if pull then ["--pull"] else [] in
   let squash = if squash then ["--squash"] else [] in
-  let iidfile = Fpath.add_seg dir "docker-iid" in
+  let iidfile = Eio.Path.(dir / "docker-iid") in
   let cmd = Cmd.docker ~docker_context @@ ["build"] @
                                           pull @ squash @ build_args @ file @
                                           ["--iidfile";
-                                           Fpath.to_string iidfile; "--";
-                                           Fpath.to_string dir] in
+                                           snd iidfile; "--";
+                                           snd dir] in
   let pp_error_command f = Fmt.string f "Docker build" in
-  Current.Process.exec ~cancellable:true ~pp_error_command ~job cmd >|= function
+  match Current.Process.exec ~cancellable:true ~pp_error_command ~job cmd with
   | Error _ as e -> e
   | Ok () ->
-    Bos.OS.File.read iidfile |> Stdlib.Result.map @@ fun hash ->
+    let hash = Eio.Path.load iidfile in
     Log.info (fun f -> f "Built docker image %s" hash);
-    Image.of_hash hash
+    Ok (Image.of_hash hash)
 
 let pp f key = Fmt.pf f "@[<v2>docker build %a@]" Key.pp key
 

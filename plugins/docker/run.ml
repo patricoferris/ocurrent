@@ -1,5 +1,3 @@
-open Lwt.Infix
-
 type t = {
   pool : unit Current.Pool.t option;
 }
@@ -33,7 +31,7 @@ end
 module Value = Current.Unit
 
 let build { pool } job key =
-  Current.Job.start job ?pool ~level:Current.Level.Average >>= fun () ->
+  Current.Job.start job ?pool ~level:Current.Level.Average;
   Current.Process.exec ~cancellable:true ~job (Key.cmd key)
 
 let pp = Key.pp
