@@ -76,8 +76,9 @@ module Monitor : sig
   (** An ['a t] is a monitor that outputs values of type ['a]. *)
 
   val create :
-    read:(unit -> 'a or_error Lwt.t) ->
-    watch:((unit -> unit) -> (unit -> unit Lwt.t) Lwt.t) ->
+    sw:Eio.Switch.t ->
+    read:(unit -> 'a or_error Eio.Promise.t) ->
+    watch:((unit -> unit) -> (unit -> unit)) ->
     pp:(Format.formatter -> unit) ->
     'a t
   (** [create ~read ~watch ~pp] is a monitor that uses [read] to read the current
@@ -158,13 +159,13 @@ module Switch : sig
   val create_off : unit -> t
   (** [create_off ()] is a fresh switch, initially (and always) off. *)
 
-  val add_hook_or_exec : t -> (unit -> unit Lwt.t) -> unit Lwt.t
+  val add_hook_or_exec : t -> (unit -> unit) -> unit
   (** [add_hook_or_exec switch fn] pushes [fn] on to the stack of functions to call
       when [t] is turned off. If [t] is already off, calls [fn] immediately.
       If [t] is in the process of being turned off, waits for that to complete
       and then runs [fn]. *)
 
-  val turn_off : t -> unit Lwt.t
+  val turn_off : t -> unit Eio.Promise.t
   (** [turn_off t] marks the switch as being turned off, then pops and
       calls clean-up functions in order. When the last one finishes, the switch
       is marked as off and cannot be used again. If the switch is already off,
@@ -191,7 +192,7 @@ module Pool : sig
 
   val of_fn :
     label : string ->
-    (priority:priority -> switch:Switch.t -> 'a Lwt.t * (unit -> unit Lwt.t)) ->
+    (sw:Eio.Switch.t -> priority:priority -> switch:Switch.t -> 'a Eio.Promise.or_exn * (unit -> unit)) ->
     'a t
   (** [of_fn ~label f] is a pool that uses [f] to get a resource.
       It should return a promise for the resource and a function that cancels
@@ -207,6 +208,7 @@ module Job : sig
 
   val create :
     ?priority:Pool.priority ->
+    sw:Eio.Switch.t ->
     switch:Switch.t ->
     label:string ->
     config:Config.t ->
@@ -216,17 +218,17 @@ module Job : sig
       @param priority Passed to the pool when {!start} is called. Default is [`Low].
       @param label A label to use in the job's filename (for debugging). *)
 
-  val start : ?timeout:Duration.t -> ?pool:unit Pool.t -> level:Level.t -> t -> unit Lwt.t
+  val start : ?timeout:Duration.t -> ?pool:unit Pool.t -> level:Level.t -> t -> unit
   (** [start t ~level] marks [t] as running. This can only be called once per job.
       If confirmation has been configured for [level], then this will wait for confirmation first.
       @param timeout If given, the job will be cancelled automatically after this period of time.
       @param pool Deprecated. Use [start_with] instead. *)
 
-  val start_with : ?timeout:Duration.t -> pool:'a Pool.t -> level:Level.t -> t -> 'a Lwt.t
+  val start_with : ?timeout:Duration.t -> pool:'a Pool.t -> level:Level.t -> t -> 'a
   (** [start_with] is like [start] except that it waits for a resource from [pool].
       The resource is freed when the job finishes. *)
 
-  val start_time : t -> float Lwt.t
+  val start_time : t -> float Eio.Promise.t
   (** [start_time t] is the time when [start] was called, or an
       unresolved promise for it if [start] hasn't been called yet. *)
 
@@ -247,7 +249,7 @@ module Job : sig
   val is_running : t -> bool
   (** [is_running t] is true if the log file is still open. *)
 
-  val wait_for_log_data : t -> unit Lwt.t
+  val wait_for_log_data : t -> unit
   (** [wait_for_log_data t] is a promise that resolves the next time log data
       is written or the log is closed. *)
 
@@ -266,12 +268,12 @@ module Job : sig
   val is_waiting_for_confirmation : t -> bool
   (** Indicates whether the job would benefit from [approve_early_start] being called. *)
 
-  val on_cancel : t -> (string -> unit Lwt.t) -> unit Lwt.t
+  val on_cancel : t -> (string -> unit) -> unit
   (** [on_cancel t fn] calls [fn reason] if the job is cancelled.
       If the job has already been cancelled, [fn] is called immediately.
       If a job finishes without being cancelled, the cancel hooks are run at the end anyway. *)
 
-  val with_handler : t -> on_cancel:(string -> unit Lwt.t) -> (unit -> 'a Lwt.t) -> 'a Lwt.t
+  val with_handler : t -> on_cancel:(string -> unit) -> (unit -> 'a) -> 'a
   (** [with_handler t ~on_cancel fn] is like [fn ()], but if the job is cancelled while [fn] is running
       then [on_cancel reason] is called. Even if cancelled, [fn] is still run to completion.
       If the job has already been cancelled then [on_cancel reason] is called immediately (but [fn] still runs). *)
@@ -287,7 +289,7 @@ module Job : sig
   val register_actions : job_id -> actions -> unit
   (** [register_actions job_id actions] is used to register handlers for e.g. rebuilding jobs. *)
 
-  val use_pool : ?priority:Pool.priority -> switch:Switch.t -> t -> 'a Pool.t -> 'a Lwt.t
+  val use_pool : ?priority:Pool.priority -> switch:Switch.t -> t -> 'a Pool.t -> 'a Eio.Promise.or_exn
   (** [use_pool ~switch t pool] gets one resource from [pool].
       The resource is returned to the pool when the switch is turned off.
       The operation will be aborted if the job is cancelled. *)
@@ -297,7 +299,7 @@ module Job : sig
   (* For unit tests we need our own test clock: *)
 
   val timestamp : (unit -> float) ref
-  val sleep : (float -> unit Lwt.t) ref
+  val sleep : (float -> unit) ref
 end
 
 (** The main event loop. *)
@@ -311,7 +313,8 @@ module Engine : sig
 
   val create :
     ?config:Config.t ->
-    ?trace:(next:unit Lwt.t -> results -> unit Lwt.t) ->
+    ?trace:(next:unit Eio.Promise.or_exn -> results -> unit) ->
+    sw:Eio.Switch.t ->
     (unit -> unit term) ->
     t
   (** [create pipeline] is a new engine running [pipeline].
@@ -328,7 +331,7 @@ module Engine : sig
 
   val jobs : results -> actions Job.Map.t
 
-  val thread : t -> 'a Lwt.t
+  val thread : t -> unit Eio.Promise.or_exn
   (** [thread t] is the engine's thread.
       Use this to monitor the engine (in case it crashes). *)
 
@@ -361,17 +364,19 @@ end
 
 (** Helper functions for spawning sub-processes. *)
 module Process : sig
-  val pp_cmd : Format.formatter -> Lwt_process.command -> unit
+  type command = string * string list
+
+  val pp_cmd : Format.formatter -> command -> unit
   (** The default command printer used in {! exec} and {! check_output}
       to write the command to the job's log. *)
 
   val exec :
     ?cwd:Fpath.t -> ?stdin:string ->
-    ?pp_cmd:(Format.formatter -> Lwt_process.command -> unit) ->
+    ?pp_cmd:(Format.formatter -> command -> unit) ->
     ?pp_error_command:(Format.formatter -> unit) ->
     cancellable:bool ->
-    job:Job.t -> Lwt_process.command ->
-    unit or_error Lwt.t
+    job:Job.t -> command ->
+    unit or_error
   (** [exec ~job cmd] uses [Lwt_process] to run [cmd], with output to [job]'s log.
       @param cwd Sets the current working directory for this command.
       @param cancellable Should the process be terminated if the job is cancelled?
@@ -382,14 +387,14 @@ module Process : sig
 
   val check_output :
     ?cwd:Fpath.t -> ?stdin:string ->
-    ?pp_cmd:(Format.formatter -> Lwt_process.command -> unit) ->
+    ?pp_cmd:(Format.formatter -> command -> unit) ->
     ?pp_error_command:(Format.formatter -> unit) ->
     cancellable:bool ->
-    job:Job.t -> Lwt_process.command ->
-    string or_error Lwt.t
+    job:Job.t -> command ->
+    string or_error
   (** Like [exec], but return the child's stdout as a string rather than writing it to the log. *)
 
-  val with_tmpdir : ?prefix:string -> (Fpath.t -> 'a Lwt.t) -> 'a Lwt.t
+  val with_tmpdir : ?prefix:string -> Eio.Fs.dir Eio.Path.t -> (Eio.Fs.dir Eio.Path.t -> 'a) -> 'a
   (** [with_tmpdir fn] creates a temporary directory, runs [fn tmpdir], and then deletes the directory
       (recursively).
       @param prefix Allows giving the directory a more meaningful name (for debugging). *)

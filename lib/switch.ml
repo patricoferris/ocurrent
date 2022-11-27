@@ -1,12 +1,10 @@
 (** Like [Lwt_switch], but the cleanup functions are called in sequence, not
     in parallel, and a reason for the shutdown may be given. *)
 
-open Lwt.Infix
-
-type callback = unit -> unit Lwt.t
+type callback = unit -> unit
 
 type t = {
-  mutable state : [`On of string * callback Stack.t | `Turning_off of unit Lwt.t | `Off];
+  mutable state : [`On of string * callback Stack.t | `Turning_off of unit Eio.Promise.t | `Off];
 }
 
 let pp_reason f x = Current_term.Output.pp (Fmt.any "()") f (x :> unit Current_term.Output.t)
@@ -15,53 +13,57 @@ let turn_off t =
   match t.state with
   | `Off ->
     Log.debug (fun f -> f "Switch.turn_off: already off");
-    Lwt.return_unit
+    Eio.Promise.create_resolved ()
   | `Turning_off thread ->
     thread
   | `On (_, callbacks) ->
-    let th, set_th = Lwt.wait () in
+    let th, set_th = Eio.Promise.create () in
     t.state <- `Turning_off th;
     let rec aux () =
       match Stack.pop callbacks with
-      | fn -> fn () >>= aux
+      | fn -> fn () |> aux
       | exception Stack.Empty ->
         t.state <- `Off;
-        Lwt.wakeup set_th ();
-        Lwt.return_unit
+        Eio.Promise.resolve set_th ();
+        th
     in
     aux ()
 
 (* Once the first callback is added, attach a GC finaliser so we can detect if the user
    forgets to turn it off. *)
-let gc t =
+let gc ~sw t =
   match t.state with
   | `Off | `Turning_off _ -> ()
   | `On (label, _) ->
     Log.err (fun f -> f "Switch %S GC'd while still on!" label);
-    Lwt.async (fun () -> turn_off t)
+    Eio.Fiber.fork ~sw (fun () -> Eio.Promise.await @@ turn_off t)
 
 let add_hook_or_fail t fn =
+  (* XXX: Pretty sure this switch needs to be passed in! *)
+  Eio.Switch.run @@ fun sw ->
   match t.state with
   | `On (_, callbacks) ->
-    if Stack.is_empty callbacks then Gc.finalise gc t;
+    if Stack.is_empty callbacks then Gc.finalise (gc ~sw) t;
     Stack.push fn callbacks
   | `Off -> Fmt.failwith "Switch already off!"
   | `Turning_off _ -> Fmt.failwith "Switch is being turned off!"
 
 let add_hook_or_exec t fn =
+  (* XXX: Same with this switch! *)
+  Eio.Switch.run @@ fun sw ->
   match t.state with
   | `On (_, callbacks) ->
-    if Stack.is_empty callbacks then Gc.finalise gc t;
-    Stack.push fn callbacks;
-    Lwt.return_unit
+    if Stack.is_empty callbacks then Gc.finalise (gc ~sw) t;
+    Stack.push fn callbacks
   | `Off ->
     fn ()
   | `Turning_off thread ->
-    thread >>= fn
+    Eio.Promise.await thread;
+    fn ()
 
 let add_hook_or_exec_opt t fn =
   match t with
-  | None -> Lwt.return_unit
+  | None -> ()
   | Some t -> add_hook_or_exec t fn
 
 let create ~label () = {

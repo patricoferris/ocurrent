@@ -10,9 +10,10 @@
    fmt
    fpath
    logs
-   lwt
+   eio
+   eio_luv
+   eio.unix
    lwt-dllist
-   lwt.unix
    prometheus
    re
    result
