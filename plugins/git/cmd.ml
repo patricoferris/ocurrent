@@ -53,7 +53,7 @@ let git_rev_parse ?(cancellable=false) ~job ~repo x =
   Current.Process.check_output ~cancellable ~job ("", cmd) |> Stdlib.Result.map String.trim
 
 let cp_r ~cancellable ~job ~src ~dst =
-  let cmd = [ "cp"; "-a"; "--"; Fpath.to_string src; Fpath.to_string dst ] in
+  let cmd = [ "cp"; "-a"; "--"; Fpath.to_string src; dst ] in
   Current.Process.exec ~cancellable ~job ("", cmd)
 
 let git_submodule_sync ~cancellable ~job ~repo =

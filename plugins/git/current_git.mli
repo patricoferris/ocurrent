@@ -39,14 +39,15 @@ module Commit : sig
   val unmarshal : string -> t
 end
 
-val clone : schedule:Current_cache.Schedule.t -> ?gref:string -> string -> Commit.t Current.t
+val clone : schedule:Current_cache.Schedule.t -> sw:Eio.Switch.t -> ?gref:string -> string -> Commit.t Current.t
 (** [clone ~schedule ~gref uri] evaluates to the head commit of [uri]'s [gref] branch (default: "master"). *)
 
-val fetch : Commit_id.t Current.t -> Commit.t Current.t
+val fetch : sw:Eio.Switch.t -> Commit_id.t Current.t -> Commit.t Current.t
 
 val with_checkout :
   ?pool:unit Current.Pool.t ->
   job:Current.Job.t ->
+  fs:Eio.Fs.dir Eio.Path.t ->
   Commit.t ->
   (Eio.Fs.dir Eio.Path.t -> 'a Current.or_error) ->
   'a Current.or_error
@@ -58,7 +59,7 @@ module Local : sig
   type t
   (** A local Git repository. *)
 
-  val v : Fpath.t -> t
+  val v : sw:Eio.Switch.t -> Fpath.t -> t
   (** [v path] is the local Git repository at [path]. *)
 
   val head : t -> [`Commit of Commit_id.t | `Ref of string ] Current.t

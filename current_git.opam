@@ -36,3 +36,6 @@ build: [
   ["dune" "runtest" "-p" name "-j" jobs] {with-test}
 ]
 dev-repo: "git+https://github.com/ocurrent/ocurrent.git"
+pin-depends:[
+  [ "irmin-watcher.dev" "git+https://github.com/patricoferris/irmin-watcher#b990127e8e7a3869100224f6f3d9dc62ec1bcd1a" ]
+]
