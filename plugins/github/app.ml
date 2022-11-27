@@ -1,7 +1,6 @@
 open Current.Syntax
-open Lwt.Infix
 
-let ( >>!= ) = Lwt_result.bind
+let ( >>!= ) = Result.bind
 
 module Metrics = struct
   open Prometheus
@@ -15,9 +14,9 @@ module Metrics = struct
 end
 
 
-let installations_changed_cond = Lwt_condition.create ()    (* Fires when the list should be updated *)
+let installations_changed_cond = Eio.Condition.create ()    (* Fires when the list should be updated *)
 
-let input_installation_webhook () = Lwt_condition.broadcast installations_changed_cond ()
+let input_installation_webhook () = Eio.Condition.broadcast installations_changed_cond
 
 let list_installations_endpoint =
   Uri.of_string "https://api.github.com/app/installations"
@@ -60,48 +59,86 @@ let webhook_secret t = t.webhook_secret
 let http { app_id; key; _ } op uri =
   let iat = truncate @@ Unix.gettimeofday () in
   let jwt = Token.encode ~key ~iat ~app_id in
-  let headers = Cohttp.Header.init_with "Authorization" ("bearer " ^ jwt) in
-  let headers = Cohttp.Header.add headers "accept" "application/vnd.github.machine-man-preview+json" in
+  let headers = Http.Header.init_with "Authorization" ("bearer " ^ jwt) in
+  let headers = Http.Header.add headers "accept" "application/vnd.github.machine-man-preview+json" in
   Log.debug (fun f -> f "API call on %a" Uri.pp uri);
-  op ~headers uri >>= fun (resp, body) ->
-  Cohttp_lwt.Body.to_string body >|= fun body ->
-  match Cohttp.Response.status resp with
+  let resp, body = op ~headers uri in
+  let body = Eio.Buf_read.take_all body in
+  match Http.Response.status resp with
   | `OK | `Created ->
     let json = Yojson.Safe.from_string body in
     Log.debug (fun f -> f "@[<v2>Got response:@,%a@]" Yojson.Safe.pp json);
     resp, json
   | err -> Fmt.failwith "@[<v2>Error accessing GitHub App API at %a: %s@,%s@]"
              Uri.pp uri
-             (Cohttp.Code.string_of_status err)
+             (Http.Status.to_string err)
              body
 
-let get ~headers uri = Cohttp_lwt_unix.Client.get ~headers uri
-let post ~headers uri = Cohttp_lwt_unix.Client.post ~headers uri
+
+let get ~net ~headers uri = 
+  let open Eio in
+  let host, path = Client.host_and_path uri |> Result.get_ok in
+  match Net.getaddrinfo_stream ~service:"https" net host with
+  | [] -> failwith "Host resolution failed"
+  | stream :: _ ->
+    Switch.run @@ fun sw ->
+    let conn = Net.connect ~sw net stream in
+    let conn =
+      Tls_eio.client_of_flow Client.tls_config
+        ?host:
+          (Domain_name.of_string_exn host
+          |> Domain_name.host |> Result.to_option)
+        conn
+    in
+    Cohttp_eio.Client.get ~headers ~conn (host, None) path
+
+let post ~net ~headers uri = 
+  let open Eio in
+  let host, path = Client.host_and_path uri |> Result.get_ok in
+  match Net.getaddrinfo_stream ~service:"https" net host with
+  | [] -> failwith "Host resolution failed"
+  | stream :: _ ->
+    Switch.run @@ fun sw ->
+    let conn = Net.connect ~sw net stream in
+    let conn =
+      Tls_eio.client_of_flow Client.tls_config
+        ?host:
+          (Domain_name.of_string_exn host
+          |> Domain_name.host |> Result.to_option)
+        conn
+    in
+    Cohttp_eio.Client.post ~headers ~conn (host, None) path
 
 let minute = 60.0
 
-let get_token app iid =
+let get_token ~net app iid =
   let uri = access_tokens_endpoint iid in
   let now = Unix.gettimeofday () in
-  http app post uri >|= fun (_resp, json) ->
+  let _resp, json = http app (post ~net) uri in
   let open Yojson.Safe.Util in
   let token = Ok (json |> member "token" |> to_string) in
   (* The token is valid for 60 minutes, so request a new one after 50 minutes. *)
   let expiry = Some (now +. 50.0 *. minute) in
   Api.{ token; expiry }
 
+let get_links headers =
+  List.rev
+    (List.fold_left
+        (fun list link_s -> List.rev_append (Cohttp.Link.of_string link_s) list)
+        [] (Http.Header.get_multi headers "link"))
+
 let next headers =
   headers
-  |> Cohttp.Header.get_links
+  |> get_links
   |> List.find_opt (fun (link : Cohttp.Link.t) ->
       List.exists (fun r -> r = Cohttp.Link.Rel.next) link.arc.relation
     )
   |> Option.map (fun link -> link.Cohttp.Link.target)
 
-let get_installations app =
-  Lwt.catch (fun () ->
+let get_installations ~net app =
+  try
      let rec aux uri =
-       http app get uri >>= fun (resp, json) ->
+       let resp, json = http app (get ~net) uri in
        let open Yojson.Safe.Util in
        let installs =
          json |> to_list |> List.filter_map (fun json ->
@@ -124,20 +161,19 @@ let get_installations app =
              )
            )
        in
-       match next (Cohttp.Response.headers resp) with
-       | None -> Lwt_result.return installs
+       match next (Http.Response.headers resp) with
+       | None -> Ok installs
        | Some target ->
          aux target >>!= fun next_installs ->
-         Lwt_result.return (installs @ next_installs)
+         Ok (installs @ next_installs)
      in
      aux list_installations_endpoint
-    ) (fun ex ->
-      Lwt_result.fail (`Msg (Fmt.str "Failed to get GitHub installations: %a" Fmt.exn ex))
-    )
+  with ex ->
+      Error (`Msg (Fmt.str "Failed to get GitHub installations: %a" Fmt.exn ex))
 
-let installation t ~account iid =
-  let api = Api.v ~get_token:(fun () -> get_token t iid) ~account:("i-" ^ account) ~app_id:t.app_id ~webhook_secret:t.webhook_secret () in
-  Installation.v ~api ~account ~iid
+let installation ~net ~sw t ~account iid =
+  let api = Api.v ~get_token:(fun () -> get_token ~net t iid) ~account:("i-" ^ account) ~app_id:t.app_id ~webhook_secret:t.webhook_secret () in
+  Installation.v ~net ~sw ~api ~account ~iid
 
 module Int_set = Set.Make(Int)
 
@@ -145,10 +181,12 @@ let remove_stale_installations new_ids =
   let new_ids = new_ids |> List.map fst |> Int_set.of_list in
   Int_map.filter (fun key _ -> Int_set.mem key new_ids)
 
-let monitor_installations t () =
+let monitor_installations ~net ~sw t () =
   let rec aux () =
-    let update = Lwt_condition.wait installations_changed_cond in
-    get_installations t >>= fun ids ->
+    let update = 
+      Eio.Fiber.fork_promise ~sw (fun () -> Eio.Condition.await_no_mutex installations_changed_cond)
+    in
+    let ids = get_installations ~net t in
     begin match ids with
       | Ok ids ->
         Prometheus.Gauge.set Metrics.installations_total (float_of_int (List.length ids));
@@ -157,7 +195,7 @@ let monitor_installations t () =
             (* Merge in new installations. Reuse existing Apis so we don't keep refreshing tokens, etc. *)
             ids |> ListLabels.fold_left ~init:old_map ~f:(fun acc (iid, account) ->
                 if Int_map.mem iid acc then acc
-                else Int_map.add iid (installation t iid ~account) acc
+                else Int_map.add iid (installation ~net ~sw t iid ~account) acc
               )
             |> remove_stale_installations ids
             |> Stdlib.Result.ok
@@ -165,8 +203,9 @@ let monitor_installations t () =
       | Error (`Msg m) ->
         Log.warn (fun f -> f "Failed to update list of installations: %s" m)
     end;
-    Lwt_unix.sleep 60.0 >>= fun () ->   (* Wait at least 1m between updates *)
-    update >>= aux
+    Eio_unix.sleep 60.0;   (* Wait at least 1m between updates *)
+    Eio.Promise.await_exn update;
+    aux ()
   in
   aux ()
 
@@ -176,7 +215,7 @@ let installations t =
 
 (* Command-line options *)
 
-let make_config app_id private_key_file allowlist webhook_secret_file =
+let make_config ~net ~sw app_id private_key_file allowlist webhook_secret_file =
   let allowlist = Allowlist.of_list allowlist in
   let data = Api.read_file private_key_file in
   let webhook_secret = Api.read_file webhook_secret_file in
@@ -185,16 +224,16 @@ let make_config app_id private_key_file allowlist webhook_secret_file =
     | Ok (`RSA key) ->
       let installations = Installs.create ~name:"installations" (Error (`Active `Running)) in
       let t = { app_id; key; allowlist; installations; webhook_secret } in
-      Lwt.async (monitor_installations t);
+      Eio.Fiber.fork ~sw (monitor_installations ~net ~sw t);
       t
     | Ok _ -> Fmt.failwith "Unsupported private key type" [@@warning "-11"]
 
 open Cmdliner
 
-let make_config_opt app_id private_key_file allowlist webhook_secret : t option Term.ret =
+let make_config_opt ~net ~sw app_id private_key_file allowlist webhook_secret : t option Term.ret =
   match app_id, private_key_file, allowlist with
   | None, None, _ -> `Ok None
-  | Some app_id, Some private_key_file, Some allowlist -> `Ok (Some (make_config app_id private_key_file allowlist webhook_secret))
+  | Some app_id, Some private_key_file, Some allowlist -> `Ok (Some (make_config ~net ~sw app_id private_key_file allowlist webhook_secret))
   | Some _, Some _, None -> `Error (true, "--github-account-allowlist is required with --github-app-id")
   | Some _, None, _ -> `Error (true, "--github-private-key-file is required with --github-app-id")
   | None, Some _, _ -> `Error (true, "--github-app-id is required with --github-private-key-file")
@@ -220,8 +259,8 @@ let allowlist =
     ~docv:"ACCOUNTS"
     ["github-account-allowlist"]
 
-let cmdliner =
-  Term.(const make_config $ Arg.required app_id $ Arg.required private_key_file $ Arg.required allowlist $ Api.webhook_secret_file)
+let cmdliner ~net ~sw =
+  Term.(const (make_config ~net ~sw) $ Arg.required app_id $ Arg.required private_key_file $ Arg.required allowlist $ Api.webhook_secret_file)
 
-let cmdliner_opt =
-  Term.(ret (const make_config_opt $ Arg.value app_id $ Arg.value private_key_file $ Arg.value allowlist $ Api.webhook_secret_file))
+let cmdliner_opt ~net ~sw =
+  Term.(ret (const (make_config_opt ~net ~sw) $ Arg.value app_id $ Arg.value private_key_file $ Arg.value allowlist $ Api.webhook_secret_file))

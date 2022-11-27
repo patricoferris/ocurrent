@@ -211,7 +211,7 @@ module Monitor = struct
   type 'a t = {
     sw : Eio.Switch.t;
     read : unit -> 'a or_error Eio.Promise.t;
-    watch : (unit -> unit) -> (unit -> unit);
+    watch : Eio.Switch.t -> (unit -> unit) -> (unit -> unit);
     pp : Format.formatter -> unit;
     value : 'a Current_term.Output.t Current_incr.var;
     reading : bool Current_incr.var;      (* Is a read operation in progress? *)
@@ -231,7 +231,7 @@ module Monitor = struct
     Eio.Condition.broadcast t.cond
 
   let rec enable t =
-    let unwatch = t.watch (refresh t) in
+    let unwatch = t.watch t.sw (refresh t) in
     if t.ref_count = 0 then disable ~unwatch t
     else get_value t ~unwatch
   and disable ~unwatch t =

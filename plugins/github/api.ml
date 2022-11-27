@@ -1,5 +1,6 @@
-open Lwt.Infix
 open Current.Syntax
+
+let (>>!=) = Result.bind
 
 (* Limit updates to one at a time for now. *)
 let pool = Current.Pool.create ~label:"github" 1
@@ -12,11 +13,12 @@ let await_event ~owner_name =
     match Hashtbl.find_opt webhook_cond owner_name with
     | Some c -> c
     | None ->
-      let c = Lwt_condition.create () in
+      let c = Eio.Condition.create () in
       Hashtbl.add webhook_cond owner_name c;
       c
   in
-  Lwt_condition.wait cond
+  (* XXX: Needs mutex? *)
+  Eio.Condition.await_no_mutex cond
 
 type actions = < rebuild : (unit -> string) option; >
 
@@ -81,7 +83,7 @@ let rebuild_webhook ~engine ~event ~get_job_ids json =
 let input_webhook body =
   let owner_name = Yojson.Safe.Util.(body |> member "repository" |> member "full_name" |> to_string) in
   match Hashtbl.find_opt webhook_cond owner_name with
-  | Some cond -> Lwt_condition.broadcast cond ()
+  | Some cond -> Eio.Condition.broadcast cond
   | None -> Log.info (fun f -> f "Got webhook event for %S, but we're not interested in that" owner_name)
 
 module Metrics = struct
@@ -360,12 +362,14 @@ type monitors = Repo_key.elt Monitors.t
 
 type t = {
   account : string;          (* Prometheus label used to report points. *)
-  get_token : unit -> token Lwt.t;
+  get_token : unit -> token;
   app_id : string option;
   webhook_secret : string; (* Shared secret for validating webhooks from GitHub *)
-  token_lock : Lwt_mutex.t;
+  token_lock : Eio.Mutex.t;
   mutable token : token;
   mutable monitors: monitors;
+  net : Eio.Net.t;
+  sw : Eio.Switch.t;
 }
 and commit = t * Commit_id.t
 and refs = {
@@ -379,37 +383,36 @@ let default_ref t = t.default_ref
 
 let all_refs t = t.all_refs
 
-let v ~get_token ?app_id ~account ~webhook_secret () =
+let v ~net ~sw ~get_token ?app_id ~account ~webhook_secret () =
   let monitors = Monitors.empty in
-  let token_lock = Lwt_mutex.create () in
-  { get_token; token_lock; token = no_token; monitors; account; app_id; webhook_secret }
+  let token_lock = Eio.Mutex.create () in
+  { get_token; token_lock; token = no_token; monitors; account; app_id; webhook_secret; net; sw }
 
 let of_oauth ~token ~webhook_secret =
-  let get_token () = Lwt.return { token = Ok token; expiry = None} in
+  let get_token () = { token = Ok token; expiry = None} in
   v ~get_token ~account:"oauth" ~webhook_secret ()
 
 let get_token t =
-  Lwt_mutex.with_lock t.token_lock @@ fun () ->
+  Eio.Mutex.use_ro t.token_lock @@ fun () ->
   let now = Unix.gettimeofday () in
   match t.token with
-  | { token; expiry = None } -> Lwt.return token
-  | { token; expiry = Some expiry } when now < expiry -> Lwt.return token
+  | { token; expiry = None } -> token
+  | { token; expiry = Some expiry } when now < expiry -> token
   | _ ->
     Log.info (fun f -> f "Getting API token");
-    Lwt.catch t.get_token
-      (fun ex ->
+    let token = 
+      try t.get_token () with ex ->
          Log.warn (fun f -> f "Error getting GitHub token: %a" Fmt.exn ex);
          let token = Error (`Msg "Failed to get GitHub token") in
          let expiry = Some (now +. 60.0) in
-         Lwt.return {token; expiry}
-      )
-    >|= fun token ->
+         {token; expiry}
+    in
     t.token <- token;
     token.token
 
 let ( / ) a b = Yojson.Safe.Util.member b a
 
-let exec_graphql ?variables t query =
+let exec_graphql ~net ?variables t query =
   let body =
     `Assoc (
       ("query", `String query) ::
@@ -418,21 +421,20 @@ let exec_graphql ?variables t query =
        | Some v -> ["variables", `Assoc v])
     )
     |> Yojson.Safe.to_string
-    |> Cohttp_lwt.Body.of_string
   in
-  get_token t >>= function
-  | Error (`Msg m) -> Lwt.fail_with m
+  match get_token t with
+  | Error _ as e -> e
   | Ok token ->
-    let headers = Cohttp.Header.init_with "Authorization" ("bearer " ^ token) in
-    Cohttp_lwt_unix.Client.post ~headers ~body graphql_endpoint >>=
+    let headers = Http.Header.init_with "Authorization" ("bearer " ^ token) in
+    Client.post ~net ~headers ~body graphql_endpoint >>!=
     fun (resp, body) ->
-    Cohttp_lwt.Body.to_string body >|= fun body ->
-    match Cohttp.Response.status resp with
+    let body = Eio.Buf_read.take_all body in
+    match Http.Response.status resp with
     | `OK ->
       let json = Yojson.Safe.from_string body in
       let open Yojson.Safe.Util in
       begin match json / "errors" with
-        | `Null -> json
+        | `Null -> Ok json
         | errors ->
           Log.warn (fun f -> f "@[<v2>GitHub returned errors: %a@]" (Yojson.Safe.pretty_print ~std:true) json);
           match errors with
@@ -475,12 +477,12 @@ module Monitor (Query : GRAPHQL_QUERY) = struct
     ^ Query.query
     ^ " }"
 
-  let exec t ({ Repo_id.owner = repo_owner; name = repo_name } as repo) =
+  let exec ~net t ({ Repo_id.owner = repo_owner; name = repo_name } as repo) =
     let variables = [
       "owner", `String repo_owner;
       "name", `String repo_name;
     ] in
-    exec_graphql t ~variables query >|= fun json ->
+    let json = exec_graphql ~net t ~variables query |> Result.get_ok in
     try
       let data = json / "data" in
       handle_rate_limit t "default_ref" (data / "rateLimit");
@@ -490,31 +492,35 @@ module Monitor (Query : GRAPHQL_QUERY) = struct
       Log.err (fun f -> f "@[<v2>Invalid JSON: %a@,%a@]" Fmt.exn ex pp json);
       raise ex
 
-  let make_monitor t repo =
+  let make_monitor ~net t repo =
     let read () =
-      Lwt.catch
-        (fun () -> exec t repo >|= fun c -> Ok c)
-        (fun ex -> Lwt_result.fail @@ `Msg (Fmt.str "GitHub query %s for %a failed: %a" Query.name Repo_id.pp repo Fmt.exn ex))
+      let v = 
+        try Ok (exec ~net t repo) with ex -> Error (`Msg (Fmt.str "GitHub query %s for %a failed: %a" Query.name Repo_id.pp repo Fmt.exn ex))
+      in
+        Eio.Promise.create_resolved v
     in
-    let watch refresh =
+    let watch sw refresh =
       let owner_name = Printf.sprintf "%s/%s" repo.owner repo.name in
-      let rec aux x =
-        x >>= fun () ->
-        let x = await_event ~owner_name in
+      let rec aux () =
+        await_event ~owner_name;
         refresh ();
-        Lwt_unix.sleep 10.0 >>= fun () ->   (* Limit updates to 1 per 10 seconds *)
-        aux x
+        Eio_unix.sleep 10.0;  (* Limit updates to 1 per 10 seconds *)
+        aux ()
       in
+      let cancel = Eio.Condition.create () in
       let x = await_event ~owner_name in
-      let thread =
-        Lwt.catch
-          (fun () -> aux x)
-          (function
-            | Lwt.Canceled -> Lwt.return_unit (* could clear metrics here *)
-            | ex -> Log.err (fun f -> f "%s thread failed: %a" Query.name Fmt.exn ex); Lwt.return_unit
-          )
+      let () =
+        Eio.Fiber.fork ~sw (fun () ->
+          Eio.Fiber.both
+            (fun () -> 
+              try aux x with
+              | Eio.Cancel.Cancelled _ -> () (* could clear metrics here *)
+              | ex -> Log.err (fun f -> f "%s thread failed: %a" Query.name Fmt.exn ex)
+            )
+            (fun () -> Eio.Condition.await_no_mutex cancel; raise (Eio.Cancel.Cancelled (Failure "Cancelled")))
+        )
       in
-      Lwt.return (fun () -> Lwt.cancel thread; Lwt.return_unit)
+      (fun () -> Eio.Condition.broadcast cancel)
     in
     let pp f = Fmt.pf f "Watch %a %s" Repo_id.pp repo Query.name in
     Current.Monitor.create ~read ~watch ~pp
@@ -525,7 +531,7 @@ module Monitor (Query : GRAPHQL_QUERY) = struct
       match Monitors.find_opt key t.monitors with
       | Some (Value i) -> i
       | _ ->
-        let i = make_monitor t repo in
+        let i = make_monitor ~net:t.net ~sw:t.sw t repo in
         t.monitors <- Monitors.add key (Value i) t.monitors;
         i
     in
@@ -758,8 +764,8 @@ module CheckRun = struct
         Value.pp status
 
     let publish t job key status =
-      Current.Job.start job ~pool ~level:Current.Level.Above_average >>= fun () ->
-      get_token t >>= function
+      Current.Job.start job ~pool ~level:Current.Level.Above_average;
+      match get_token t with
       | Error (`Msg m) -> Lwt.fail_with m
       | Ok token ->
          let token = Github.Token.of_string token in
@@ -789,23 +795,24 @@ module CheckRun = struct
            let check_run_id = Int64.to_string check_run.Github_j.check_run_id in
            let body = `Assoc (Value.json_items status) |> Yojson.Safe.to_string in
            Log.debug (fun f -> f "update_check: %s" body);
-           Check.update_check_run ~token ~owner ~repo ~check_run_id ~body () in
+           Check.update_check_run ~token ~owner ~repo ~check_run_id ~body () 
+        in
 
-         Lwt.try_bind ( fun () ->
+         try
+          let _ : Github_j.check_run Github.Response.t =
              let open Github in
              let open Monad in
              run (
-               fetch_check_run () >>= function
+               match fetch_check_run () with
                | None -> create_check ()
-               | Some check_run -> update_check_run check_run ()))
-
-           (* Ignore the response and return unit. *)
-           (fun (_ : Github_j.check_run Github.Response.t) -> Lwt_result.return ())
-           (fun ex ->
+               | Some check_run -> update_check_run check_run ())
+          in
+            Ok ()
+         with ex ->
              Log.info (fun f -> f "@[<v2>%a failed: %a@]"
                                   pp (key, status)
                                   Fmt.exn ex);
-             Lwt_result.fail (`Msg "Failed to set GitHub status"))
+             Lwt_result.fail (`Msg "Failed to set GitHub status")
 
   end
 

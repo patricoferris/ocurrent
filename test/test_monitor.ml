@@ -23,7 +23,7 @@ let rec read () =
     Eio.Condition.await_no_mutex data_cond;
     read ()
 
-let watch update =
+let watch _sw update =
   Logs.info (fun f -> f "Installing watch");
   assert (!w = None);
   let ready, set_ready = Eio.Promise.create () in

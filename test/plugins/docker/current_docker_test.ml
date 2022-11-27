@@ -120,7 +120,7 @@ let image_monitor ~sw tag =
   | Some x -> x
   | None ->
     let read () = fst @@ get_pull tag in
-    let watch refresh =
+    let watch sw refresh =
       let rec aux () =
         Eio.Condition.await_no_mutex pulls_cond;
         refresh ();

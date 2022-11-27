@@ -78,7 +78,7 @@ module Monitor : sig
   val create :
     sw:Eio.Switch.t ->
     read:(unit -> 'a or_error Eio.Promise.t) ->
-    watch:((unit -> unit) -> (unit -> unit)) ->
+    watch:(Eio.Switch.t -> (unit -> unit) -> (unit -> unit)) ->
     pp:(Format.formatter -> unit) ->
     'a t
   (** [create ~read ~watch ~pp] is a monitor that uses [read] to read the current

@@ -4,7 +4,8 @@
    astring
    base64
    cmdliner
-   cohttp-lwt-unix
+   cohttp-eio
+   tls-eio
    cstruct
    current
    current.cache

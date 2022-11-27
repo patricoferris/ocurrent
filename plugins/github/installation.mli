@@ -11,7 +11,7 @@ val repositories : ?include_archived:bool -> t Current.t -> Api.Repo.t list Curr
 
 (* Private API *)
 
-val v : iid:int -> account:string -> api:Api.t -> t
+val v : net:Eio.Net.t -> sw:Eio.Switch.t -> iid:int -> account:string -> api:Api.t -> t
 (** [v ~iid ~account ~api] is the configuration for GitHub app installation [iid].
     @param account The GitHub account which installed the app.
     @param api The configuration used to access GitHub for this installation. *)
