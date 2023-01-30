@@ -37,25 +37,29 @@ let pp_cmd ppf (v, args) =
   let args' = Array.map remove_access_tokens args in
   Current.Process.pp_cmd ppf (v, args')
 
-let git ~cancellable ~job ?cwd args =
+let git ?user ~cancellable ~job ?cwd args =
   let args =
     match cwd with
     | None -> args
     | Some cwd -> "-C" :: Fpath.to_string cwd :: args
   in
-  let cmd = Array.of_list ("git" :: args) in
+  let with_user args = match user with
+   | Some user -> "sudo" :: "-u" :: user :: "--" :: "sudo" :: "-E" :: "--" :: args
+   | None -> args
+  in
+  let cmd = Array.of_list (with_user ("git" :: args)) in
   Current.Process.exec ~pp_cmd ~cancellable ~job ("", cmd)
 
-let git_clone ~cancellable ~job ~src dst =
-  git ~cancellable ~job ["clone"; "--recursive"; "-q"; src; Fpath.to_string dst]
+let git_clone ?user ~cancellable ~job ~src dst =
+  git ?user ~cancellable ~job ["clone"; "--recursive"; "-q"; src; Fpath.to_string dst]
 
-let git_fetch ?recurse_submodules ~cancellable ~job ~src ~dst gref =
+let git_fetch ?user ?recurse_submodules ~cancellable ~job ~src ~dst gref =
   let flags =
     match recurse_submodules with
     | None -> []
     | Some x -> ["--recurse-submodules=" ^ string_of_bool x]
   in
-  git ~cancellable ~job ~cwd:dst ("fetch" :: flags @ ["-q"; "-f"; src; gref])
+  git ?user ~cancellable ~job ~cwd:dst ("fetch" :: flags @ ["-q"; "-f"; src; gref])
 
 let git_reset_hard ~job ~repo hash =
   git ~cancellable:false ~job ~cwd:repo ["reset"; "--hard"; "-q"; hash]
@@ -82,10 +86,10 @@ let git_submodule_deinit ~cancellable ~job ~repo ~force ~all =
   in
   git ~cancellable ~job ~cwd:repo ("submodule" :: "deinit" :: flags)
 
-let git_submodule_update ~cancellable ~job ~repo ~init ~fetch =
+let git_submodule_update ?user ~cancellable ~job ~repo ~init ~fetch =
   let flags = List.concat [
       (if init then ["--init"] else []);
       (if fetch then [] else ["--no-fetch"]);
     ]
   in
-  git ~cancellable ~job ~cwd:repo ("submodule" :: "update" :: "--recursive" :: flags)
+  git ?user ~cancellable ~job ~cwd:repo ("submodule" :: "update" :: "--recursive" :: flags)

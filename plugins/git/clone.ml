@@ -1,6 +1,11 @@
 open Lwt.Infix
 
-type t = { token : string option }
+type credentials = [
+  | `Token of string
+  | `User of string
+]
+
+type t = { credentials : credentials option }
 
 let ( >>!= ) = Lwt_result.bind
 
@@ -37,20 +42,21 @@ let insert_token ~token repo =
   | _ -> repo
 
 
-let build { token } job { Key.repo; gref } =
+let build { credentials } job { Key.repo; gref } =
   Lwt_mutex.with_lock (repo_lock repo) @@ fun () ->
   Current.Job.start job ~level:Current.Level.Mostly_harmless >>= fun () ->
-  let src =
-    match token with
-    | Some token -> insert_token ~token repo
-    | None -> repo
+  let src, user =
+    match credentials with
+    | Some (`Token token) -> insert_token ~token repo, None
+    | Some (`User user) -> repo, Some user
+    | _ -> repo, None
   in
   let local_repo = Cmd.local_copy repo in
   (* Ensure we have a local clone of the repository. *)
   begin
     if Cmd.dir_exists local_repo
-    then Cmd.git_fetch ~cancellable:true ~job ~src ~dst:local_repo (Fmt.str "%s:refs/remotes/origin/%s" gref gref)
-    else Cmd.git_clone ~cancellable:true ~job ~src local_repo
+    then Cmd.git_fetch ?user ~cancellable:true ~job ~src ~dst:local_repo (Fmt.str "%s:refs/remotes/origin/%s" gref gref)
+    else Cmd.git_clone ?user ~cancellable:true ~job ~src local_repo
   end >>!= fun () ->
   Cmd.git_rev_parse ~cancellable:true ~job ~repo:local_repo ("origin/" ^ gref) >>!= fun hash ->
   let id = { Commit_id.repo; gref; hash } in
