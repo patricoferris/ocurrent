@@ -25,7 +25,7 @@ class type raw_resource = [t] raw
 
 let allow_all _ _ = true
 
-let v ?(name="OCurrent") ?authn ?(secure_cookies=false) ?refresh_pipeline ?custom_css has_role routes =
+let v ?(name="OCurrent") ?authn ?(secure_cookies=false) ?refresh_pipeline ?custom_css ~has_role routes =
   let db = Lazy.force Current.Db.v in
   let router = Routes.one_of routes in
   let nav_links = routes |> List.filter_map (fun route ->
