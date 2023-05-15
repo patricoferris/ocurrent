@@ -13,22 +13,20 @@ let ( >>!= ) x f =
   | Error _ as e -> Lwt.return e
 
 module Fetch = struct
-  type t = { token : (unit -> string Lwt.t) option }
+  type t = { credentials : Clone.credentials option }
   module Key = Commit_id
   module Value = Commit
 
   let id = "git-fetch"
 
-  let build { token } job key =
+  let build { credentials } job key =
     let { Commit_id.repo = remote_repo; gref; hash = _ } = key in
-    let src =
-      match token with
-      | Some token ->
-        token () >|= fun token ->
-        Clone.insert_token ~token remote_repo
-      | None -> Lwt.return remote_repo
+    let src, user =
+      match credentials with
+      | Some (`Token token) -> Clone.insert_token ~token remote_repo, None
+      | Some (`User user) -> remote_repo, Some user
+      | _ -> remote_repo, None
     in
-    src >>= fun src ->
     let level =
       if Commit_id.is_local key then Current.Level.Harmless
       else Current.Level.Mostly_harmless
@@ -46,7 +44,7 @@ module Fetch = struct
     begin
       Commit.check_cached ~cancellable:false ~job commit >>= function
       | Ok () -> Lwt.return (Ok ())
-      | Error _ -> Cmd.git_fetch ~cancellable:true ~job ~recurse_submodules:false ~src ~dst:local_repo gref
+      | Error _ -> Cmd.git_fetch ?user ~cancellable:true ~job ~recurse_submodules:false ~src ~dst:local_repo gref
     end >>!= fun () ->
     (* Check we got the commit we wanted. *)
     Commit.check_cached ~cancellable:false ~job commit >>!= fun () ->
@@ -64,7 +62,7 @@ module Fetch = struct
     Cmd.git_reset_hard ~job ~repo:local_repo commit.id.hash >>!= fun () ->
     Cmd.git_submodule_sync ~cancellable:false ~job ~repo:local_repo >>!= fun () ->
     Cmd.git_submodule_deinit ~force:true ~all:true ~cancellable:false ~job ~repo:local_repo >>!= fun () ->
-    Cmd.git_submodule_update ~init:true ~cancellable:true ~fetch:true ~job ~repo:local_repo >>!= fun () ->
+    Cmd.git_submodule_update ?user ~init:true ~cancellable:true ~fetch:true ~job ~repo:local_repo () >>!= fun () ->
     Lwt.return @@ Ok commit
 
   let pp f key = Fmt.pf f "git fetch %a" Key.pp key
@@ -74,19 +72,21 @@ end
 
 module Fetch_cache = Current_cache.Make(Fetch)
 
-let fetch ?token cid =
+type credentials = Clone.credentials
+
+let fetch ?credentials cid =
   Current.component "fetch" |>
   let> cid = cid in
-  Fetch_cache.get { token } cid
+  Fetch_cache.get { credentials } cid
 
 module Clone_cache = Current_cache.Make(Clone)
 
-let clone ~schedule ?token ?(gref="master") repo =
+let clone ~schedule ?credentials ?(gref="master") repo =
   Current.component "clone@ %s@ %s" repo gref |>
   let> () = Current.return () in
-  Clone_cache.get ~schedule Clone.{ token } { Clone.Key.repo; gref }
+  Clone_cache.get ~schedule Clone.{ credentials } { Clone.Key.repo; gref }
 
-let with_checkout ?pool ~job commit fn =
+let with_checkout ?user ?pool ~job commit fn =
   let { Commit.repo; id } = commit in
   let short_hash = Astring.String.with_range ~len:8 id.Commit_id.hash in
   Current.Job.log job "@[<v2>Checking out commit %s. To reproduce:@,%a@]"
@@ -104,7 +104,7 @@ let with_checkout ?pool ~job commit fn =
        Cmd.git_submodule_deinit ~force:true ~all:true ~cancellable:false ~job ~repo:tmpdir >>!= fun () ->
        Cmd.git_reset_hard ~job ~repo:tmpdir id.Commit_id.hash >>= function
        | Ok () ->
-         Cmd.git_submodule_update ~init:true ~cancellable:true ~fetch:false ~job ~repo:tmpdir >>!= fun () ->
+         Cmd.git_submodule_update ?user ~init:true ~cancellable:true ~fetch:false ~job ~repo:tmpdir () >>!= fun () ->
          Current.Switch.turn_off switch >>= fun () ->
          fn tmpdir
        | Error e ->

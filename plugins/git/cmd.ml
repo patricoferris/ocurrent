@@ -28,16 +28,16 @@ let remove_access_tokens s =
   match Astring.String.cut ~sep:"https://x-access-token:" s with
   | Some ("", x) -> (
     match Astring.String.cut ~sep:"@" x with
-      | Some (token, rest) -> "https://<token>" ^ rest
+      | Some (_token, rest) -> "https://<token>" ^ rest
       | None -> s
   )
-  | None -> s
+  | _ -> s
 
 let pp_cmd ppf (v, args) =
   let args' = Array.map remove_access_tokens args in
   Current.Process.pp_cmd ppf (v, args')
 
-let git ~cancellable ~job ?cwd ?config args =
+let git ?user ~cancellable ~job ?cwd ?config args =
   let args =
     match cwd with
     | None -> args
@@ -49,24 +49,28 @@ let git ~cancellable ~job ?cwd ?config args =
           List.map (fun config -> ["-c" ; config]) config
           |> List.flatten
   in
-  let cmd = Array.of_list ("git" :: config @ args) in
+  let with_user args = match user with
+   | Some user -> "sudo" :: "-u" :: user :: "--" :: "sudo" :: "-E" :: "--" :: args
+   | None -> args
+  in
+  let cmd = Array.of_list (with_user @@ "git" :: config @ args) in
   Current.Process.exec ~pp_cmd ~cancellable ~job ("", cmd)
 
 (*  This command manipulates paths. It requires [protocol.file.allow=always] to
     be set to make sure we can update the submodules.
 
     Cf: https://git-scm.com/docs/git-config#Documentation/git-config.txt-protocolallow *)
-let git_clone ~cancellable ~job ~src dst =
+let git_clone ?user ~cancellable ~job ~src dst =
     let config = [ "protocol.file.allow=always" ] in
-    git ~config ~cancellable ~job ["clone"; "--recursive"; "-q"; src; Fpath.to_string dst]
+    git ?user ~config ~cancellable ~job ["clone"; "--recursive"; "-q"; src; Fpath.to_string dst]
 
-let git_fetch ?recurse_submodules ~cancellable ~job ~src ~dst gref =
+let git_fetch ?user ?recurse_submodules ~cancellable ~job ~src ~dst gref =
   let flags =
     match recurse_submodules with
     | None -> []
     | Some x -> ["--recurse-submodules=" ^ string_of_bool x]
   in
-  git ~cancellable ~job ~cwd:dst ("fetch" :: flags @ ["-q"; "-f"; src; gref])
+  git ?user ~cancellable ~job ~cwd:dst ("fetch" :: flags @ ["-q"; "-f"; src; gref])
 
 let git_reset_hard ~job ~repo hash =
   git ~cancellable:false ~job ~cwd:repo ["reset"; "--hard"; "-q"; hash]
@@ -97,11 +101,11 @@ let git_submodule_deinit ~cancellable ~job ~repo ~force ~all =
     be set to make sure we can update the submodules.
 
     cf: https://git-scm.com/docs/git-config#Documentation/git-config.txt-protocolallow *)
-let git_submodule_update ~cancellable ~job ~repo ~init ~fetch =
+let git_submodule_update ?user ~cancellable ~job ~repo ~init ~fetch () =
   let config = [ "protocol.file.allow=always" ] in
   let flags = List.concat [
       (if init then ["--init"] else []);
       (if fetch then [] else ["--no-fetch"]);
     ]
   in
-  git ~config ~cancellable ~job ~cwd:repo ("submodule" :: "update" :: "--recursive" :: flags)
+  git ?user ~config ~cancellable ~job ~cwd:repo ("submodule" :: "update" :: "--recursive" :: flags)
