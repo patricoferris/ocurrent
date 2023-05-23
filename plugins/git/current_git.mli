@@ -35,6 +35,9 @@ module Commit : sig
   val pp_short : t Fmt.t
   (** [pp_short] shows just the start of the hash. *)
 
+  val to_yojson : t -> Yojson.Safe.t
+  val of_yojson : Yojson.Safe.t -> (t, string) result
+
   val marshal : t -> string
   val unmarshal : string -> t
 end
