@@ -13,13 +13,14 @@ let ( >>!= ) x f =
   | Error _ as e -> Lwt.return e
 
 module Fetch = struct
-  type t = { token : (unit -> string Lwt.t) option }
+  (* TODO: no submodules should exist inside the key probably! *)
+  type t = { token : (unit -> string Lwt.t) option; no_submodules : bool }
   module Key = Commit_id
   module Value = Commit
 
   let id = "git-fetch"
 
-  let build { token } job key =
+  let build { token; no_submodules } job key =
     let { Commit_id.repo = remote_repo; gref; hash = _ } = key in
     let src =
       match token with
@@ -39,7 +40,7 @@ module Fetch = struct
     (* Ensure we have a local clone of the repository. *)
     begin
       if Cmd.dir_exists local_repo then Lwt.return (Ok ())
-      else Cmd.git_clone ~cancellable:true ~job ~src local_repo
+      else Cmd.git_clone ~recurse_submodules:(not no_submodules) ~cancellable:true ~job ~src local_repo
     end >>!= fun () ->
     let commit = { Commit.repo = local_repo; id = key } in
     (* Fetch the commit (if missing). *)
@@ -62,9 +63,13 @@ module Fetch = struct
        here. What we really want is "submodule update --init --sync --recursive --prune", but Git
        doesn't offer that. *)
     Cmd.git_reset_hard ~job ~repo:local_repo commit.id.hash >>!= fun () ->
-    Cmd.git_submodule_sync ~cancellable:false ~job ~repo:local_repo >>!= fun () ->
-    Cmd.git_submodule_deinit ~force:true ~all:true ~cancellable:false ~job ~repo:local_repo >>!= fun () ->
-    Cmd.git_submodule_update ~init:true ~cancellable:true ~fetch:true ~job ~repo:local_repo >>!= fun () ->
+    let submodules =
+      if no_submodules then Lwt.return (Ok ()) else
+      Cmd.git_submodule_sync ~cancellable:false ~job ~repo:local_repo >>!= fun () ->
+      Cmd.git_submodule_deinit ~force:true ~all:true ~cancellable:false ~job ~repo:local_repo >>!= fun () ->
+      Cmd.git_submodule_update ~init:true ~cancellable:true ~fetch:true ~job ~repo:local_repo
+    in
+    submodules >>!= fun () ->
     Lwt.return @@ Ok commit
 
   let pp f key = Fmt.pf f "git fetch %a" Key.pp key
@@ -74,17 +79,17 @@ end
 
 module Fetch_cache = Current_cache.Make(Fetch)
 
-let fetch ?token cid =
+let fetch ?(no_submodules=false) ?token cid =
   Current.component "fetch" |>
   let> cid = cid in
-  Fetch_cache.get { token } cid
+  Fetch_cache.get { token; no_submodules } cid
 
 module Clone_cache = Current_cache.Make(Clone)
 
-let clone ~schedule ?token ?(gref="master") repo =
+let clone ~schedule ?(no_submodules=false) ?token ?(gref="master") repo =
   Current.component "clone@ %s@ %s" repo gref |>
   let> () = Current.return () in
-  Clone_cache.get ~schedule Clone.{ token } { Clone.Key.repo; gref }
+  Clone_cache.get ~schedule Clone.{ token; no_submodules } { Clone.Key.repo; gref }
 
 let with_checkout ?pool ~job commit fn =
   let { Commit.repo; id } = commit in

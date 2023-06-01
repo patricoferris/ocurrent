@@ -46,8 +46,12 @@ let git ~cancellable ~job ?cwd args =
   let cmd = Array.of_list ("git" :: args) in
   Current.Process.exec ~pp_cmd ~cancellable ~job ("", cmd)
 
-let git_clone ~cancellable ~job ~src dst =
-  git ~cancellable ~job ["clone"; "--recursive"; "-q"; src; Fpath.to_string dst]
+let git_clone ?(recurse_submodules=true) ~cancellable ~job ~src dst =
+  let rest =
+    if recurse_submodules then ["--recursive"; "-q"; src; Fpath.to_string dst]
+    else [ "-q"; src; Fpath.to_string dst]
+  in
+  git ~cancellable ~job ("clone" :: rest)
 
 let git_fetch ?recurse_submodules ~cancellable ~job ~src ~dst gref =
   let flags =
