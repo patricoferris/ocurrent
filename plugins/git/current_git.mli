@@ -45,6 +45,7 @@ val clone : schedule:Current_cache.Schedule.t -> ?no_submodules:bool -> ?token:s
 val fetch : ?no_submodules:bool -> ?token:(unit -> string Lwt.t) -> Commit_id.t Current.t -> Commit.t Current.t
 
 val with_checkout :
+  ?no_submodules:bool ->
   ?pool:unit Current.Pool.t ->
   job:Current.Job.t ->
   Commit.t ->

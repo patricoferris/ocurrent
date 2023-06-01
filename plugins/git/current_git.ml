@@ -91,7 +91,7 @@ let clone ~schedule ?(no_submodules=false) ?token ?(gref="master") repo =
   let> () = Current.return () in
   Clone_cache.get ~schedule Clone.{ token; no_submodules } { Clone.Key.repo; gref }
 
-let with_checkout ?pool ~job commit fn =
+let with_checkout ?(no_submodules=false) ?pool ~job commit fn =
   let { Commit.repo; id } = commit in
   let short_hash = Astring.String.with_range ~len:8 id.Commit_id.hash in
   Current.Job.log job "@[<v2>Checking out commit %s. To reproduce:@,%a@]"
@@ -106,10 +106,18 @@ let with_checkout ?pool ~job commit fn =
        end >>= fun () ->
        Current.Process.with_tmpdir ~prefix:"git-checkout" @@ fun tmpdir ->
        Cmd.cp_r ~cancellable:true ~job ~src:(Fpath.(repo / ".git")) ~dst:tmpdir >>!= fun () ->
-       Cmd.git_submodule_deinit ~force:true ~all:true ~cancellable:false ~job ~repo:tmpdir >>!= fun () ->
+       let submodule_deinit =
+          if no_submodules then Lwt.return_ok () else
+          Cmd.git_submodule_deinit ~force:true ~all:true ~cancellable:false ~job ~repo:tmpdir
+       in
+       submodule_deinit >>!= fun () ->
        Cmd.git_reset_hard ~job ~repo:tmpdir id.Commit_id.hash >>= function
        | Ok () ->
-         Cmd.git_submodule_update ~init:true ~cancellable:true ~fetch:false ~job ~repo:tmpdir >>!= fun () ->
+         let submodule_update =
+           if no_submodules then Lwt.return_ok () else
+           Cmd.git_submodule_update ~init:true ~cancellable:true ~fetch:false ~job ~repo:tmpdir
+         in
+         submodule_update >>!= fun () ->
          Current.Switch.turn_off switch >>= fun () ->
          fn tmpdir
        | Error e ->
