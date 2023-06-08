@@ -28,7 +28,7 @@ end
 
 
 module Make (Metadata : sig type t end) = struct
-  type metadata = Metadata
+  type metadata = Metadata.t
   type 'a t = {
     id : Id.t;
     bind : bind_context;
