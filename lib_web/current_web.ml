@@ -15,7 +15,8 @@ let metrics ~engine = object
     Prometheus.CollectorRegistry.(collect default) >>= fun data ->
     let body = Fmt.to_to_string Prometheus_app.TextFormat_0_0_4.output data in
     let headers = Cohttp.Header.init_with "Content-Type" "text/plain; version=0.0.4" in
-    Utils.Server.respond_string ~status:`OK ~headers ~body ()
+    Utils.Server.respond_string ~status:`OK ~headers ~body () >|= fun r ->
+   (`Response r :> Utils.Server.response_action)
 end
 
 let set_confirm ~engine = object
@@ -27,13 +28,15 @@ let set_confirm ~engine = object
     match List.assoc_opt "level" data |> Option.value ~default:[] with
     | ["none"] ->
       Current.Config.set_confirm config None;
-      Utils.Server.respond_redirect ~uri:(Uri.of_string "/") ()
+      Utils.Server.respond_redirect ~uri:(Uri.of_string "/") () >|= fun r ->
+      `Response r
     | [level] ->
       begin match Current.Level.of_string level with
         | Error (`Msg msg) -> Context.respond_error ctx `Bad_request msg
         | Ok level ->
           Current.Config.set_confirm config (Some level);
-          Utils.Server.respond_redirect ~uri:(Uri.of_string "/") ()
+          Utils.Server.respond_redirect ~uri:(Uri.of_string "/") () >|= fun r ->
+          `Response r
       end
     | _ -> Context.respond_error ctx `Bad_request "Missing level"
 end
@@ -62,13 +65,14 @@ let handle_request ~site _conn request body =
   let path = Uri.path uri in
   Log.info (fun f -> f "HTTP %s %S" (Cohttp.Code.string_of_method meth) path);
   match Routes.match' site.Site.router ~target:path with
-  | Routes.NoMatch -> Utils.Server.respond_not_found ()
+  | Routes.NoMatch -> Utils.Server.respond_not_found () >|= fun r -> `Response r
   | (FullMatch resource) | (MatchWithTrailingSlash resource) ->
     match meth with
     | `GET -> resource#get_raw site request
     | `POST -> resource#post_raw site request body
     | (`HEAD | `PUT | `OPTIONS | `CONNECT | `TRACE | `DELETE | `PATCH | `Other _) ->
-      Utils.Server.respond_error ~status:`Bad_request ~body:"Bad method" ()
+      Utils.Server.respond_error ~status:`Bad_request ~body:"Bad method" () >|= fun r ->
+      `Response r 
 
 let pp_mode f mode =
   Sexplib.Sexp.pp_hum f (Conduit_lwt_unix.sexp_of_server mode)
@@ -77,7 +81,7 @@ let default_mode = `TCP (`Port 8080)
 
 let run ?(mode=default_mode) site =
   let callback = handle_request ~site in
-  let config = Utils.Server.make ~callback () in
+  let config = Utils.Server.make_response_action ~callback () in
   Log.info (fun f -> f "Starting web server: %a" pp_mode mode);
   Lwt.try_bind
     (fun () -> Utils.Server.create ~mode config)

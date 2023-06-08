@@ -49,6 +49,7 @@ let webhook ~engine ~get_job_ids ~webhook_secret = object
     | Error msg ->
       Log.warn (fun f -> f "%s" msg);
       Cohttp_lwt_unix.Server.respond_string ~status:`Unauthorized ~body:"Invalid X-Hub-Signature-256" ()
+      >|= fun r -> `Response r
     | Ok () ->
       let event_v = Webhook_event.validate event in
       begin match event_v with
@@ -62,5 +63,5 @@ let webhook ~engine ~get_job_ids ~webhook_secret = object
             in
             Api.rebuild_webhook ~engine ~event:c ~get_job_ids json_body
       end;
-      Cohttp_lwt_unix.Server.respond_string ~status:`OK ~body:"OK" ()
+      Cohttp_lwt_unix.Server.respond_string ~status:`OK ~body:"OK" () >|= fun r -> `Response r
 end

@@ -116,19 +116,22 @@ let template t ?refresh contents =
       )
   )
 
-let respond_ok t ?refresh body =
+let respond_ok t ?refresh body : Cohttp_lwt_unix.Server.response_action Lwt.t =
   let headers = Cohttp.Header.add (headers t) "Content-Type" "text/html; charset=utf-8" in
   let body = template t ?refresh body in
-  Utils.Server.respond_string ~headers ~status:`OK ~body ()
+  Utils.Server.respond_string ~headers ~status:`OK ~body () >|= fun r ->
+  `Response r
 
-let respond_redirect t uri =
-  Utils.Server.respond_redirect ~headers:(headers t) ~uri ()
+let respond_redirect t uri : Cohttp_lwt_unix.Server.response_action Lwt.t =
+  Utils.Server.respond_redirect ~headers:(headers t) ~uri () >|= fun r ->
+  `Response r 
 
-let respond_error t status msg =
+let respond_error t status msg : Cohttp_lwt_unix.Server.response_action Lwt.t =
   let headers = Cohttp.Header.add (headers t) "Content-Type" "text/html; charset=utf-8" in
   let body = template t [Tyxml.Html.txt msg] in
-  Utils.Server.respond_string ~headers ~status ~body ()
+  Utils.Server.respond_string ~headers ~status ~body () >|= fun r ->
+  `Response r
 
-let set_user t user =
+let set_user t user : Cohttp_lwt_unix.Server.response_action Lwt.t =
   Site.Sess.generate t.site.session_backend (User.marshal user) >>= fun session ->
   respond_redirect { t with session } (Uri.of_string "/")

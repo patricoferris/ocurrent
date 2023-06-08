@@ -165,30 +165,33 @@ let validate_rule pattern report score =
  | _ ->
    Error "Bad form submission"
 
+let respond_error ?headers ?status ~body () = 
+  Server.respond_error ?headers ?status ~body () >|= fun r -> `Response r
+
 let handle_post ctx data =
   let pattern = List.assoc_opt "pattern" data |> Option.value ~default:[] in
   let report = List.assoc_opt "report" data |> Option.value ~default:[] in
   let score = List.assoc_opt "score" data |> Option.value ~default:[] in
   if List.mem_assoc "remove" data then (
     match pattern with
-    | [""] -> Server.respond_error ~body:"Pattern can't be empty" ()
+    | [""] -> respond_error ~body:"Pattern can't be empty" ()
     | [pattern] ->
         begin match LM.remove_rule pattern with
           | Ok () -> render ctx ~msg:"Rule removed"
           | Error `Rule_not_found -> render ctx ~msg:"Rule not found" ~pattern
         end
     | _ ->
-      Server.respond_error ~body:"Bad form submission" ()
+      respond_error ~body:"Bad form submission" () 
   ) else if List.mem_assoc "add" data then (
     match validate_rule pattern report score with
     | Ok rule -> LM.add_rule rule; render ctx ~msg:"Rule added"
-    | Error body -> Server.respond_error ~body ()
+    | Error body -> respond_error ~body ()
   ) else if List.mem_assoc "test" data then (
     match pattern, report, score with
-    | [""], _, _ -> Server.respond_error ~body:"Pattern can't be empty" ()
+    | [""], _, _ -> respond_error ~body:"Pattern can't be empty" ()
     | [pattern], [report], [score] ->
       begin match Re.Pcre.re pattern with
-        | exception _ -> Server.respond_error ~body:"Invalid PCRE-format pattern" ()
+        | exception _ -> respond_error ~body:"Invalid PCRE-format pattern" ()
         | _ -> render ctx ~test:pattern ~pattern ~report ~score
       end
     | _ -> Context.respond_error ctx `Bad_request "Bad form submission"
@@ -216,14 +219,14 @@ let handle_post_multipart ctx elts =
               | _ -> i + 1, rules, (Fmt.str "Rule at line %d: Bad CSV entry" i) :: errors)
         in
         begin match validate with
-          | exception End_of_file -> Server.respond_error ~body:"Premature end of CSV file" ()
+          | exception End_of_file -> respond_error ~body:"Premature end of CSV file" ()
           | exception Csv.Failure (nrecord, nfield, msg) ->
-            Server.respond_error ~body:(Fmt.str "Rule at line %d, field %d: %s" nrecord nfield msg) ()
+            respond_error ~body:(Fmt.str "Rule at line %d, field %d: %s" nrecord nfield msg) ()
           | _, rules, [] ->
             List.iter LM.add_rule rules;
             render ctx ~msg:"Rules added"
           | _, _, errors ->
-            Server.respond_error ~body:(String.concat "\n" (List.rev errors)) ()
+            respond_error ~body:(String.concat "\n" (List.rev errors)) ()
         end
       | _ -> Context.respond_error ctx `Bad_request "Bad form submission"
     end
@@ -263,5 +266,6 @@ let rules_csv = object
     let ch = Csv.to_buffer buf in
     Fun.protect (fun () -> Csv.output_all ch csv) ~finally:(fun () -> Csv.close_out ch);
     let body = Buffer.contents buf in
-    Utils.Server.respond_string ~status:`OK ~headers ~body ()
+    Utils.Server.respond_string ~status:`OK ~headers ~body () >|= fun r ->
+    `Response r
 end

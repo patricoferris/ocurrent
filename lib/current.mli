@@ -49,6 +49,8 @@ module Metadata : sig
   }
 end
 
+module Node : Current_term.Node with type metadata = Metadata.t
+
 (** An OCurrent pipeline is made up of primitive operations.
     A primitive is roughly the content of a single box in the diagram.
 
@@ -68,7 +70,8 @@ end
 
 include Current_term.S.TERM with
   type metadata := Metadata.t and
-  type 'a primitive := 'a Primitive.t
+  type 'a primitive := 'a Primitive.t and
+  type 'a t = 'a Node.t
 
 (** A monitor is an input pipeline stage that can watch for external events. *)
 module Monitor : sig

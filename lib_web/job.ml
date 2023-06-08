@@ -139,7 +139,8 @@ let job ~engine ~job_id = object
         (* Otherwise, an nginx reverse proxy will wait for the whole log before sending anything. *)
         Cohttp.Header.init_with "X-Accel-Buffering" "no"
       in
-      Utils.Server.respond ~status:`OK ~headers ~body ()
+      Utils.Server.respond ~status:`OK ~headers ~body () >|= fun r ->
+      `Response r
 end
 
 let rebuild ~engine ~job_id = object
@@ -153,7 +154,8 @@ let rebuild ~engine ~job_id = object
     | None -> Context.respond_error ctx `Bad_request "Job does not support rebuild"
     | Some rebuild ->
       let new_id = rebuild () in
-      Utils.Server.respond_redirect ~uri:(Uri.of_string ("/job/" ^ new_id)) ()
+      Utils.Server.respond_redirect ~uri:(Uri.of_string ("/job/" ^ new_id)) () >|= fun r ->
+      `Response r
 end
 
 let cancel ~job_id = object

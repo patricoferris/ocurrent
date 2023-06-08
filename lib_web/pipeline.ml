@@ -13,7 +13,7 @@ let render_svg ctx a =
       let query = (k, [v]) :: List.remove_assoc k old_query in
       Some (Uri.make ~path:"/" ~query () |> Uri.to_string)
   and job_info { Current.Metadata.job_id; update } =
-    let url = job_id |> Option.map (fun id -> Fmt.str "/job/%s" id) in
+    let url = job_id |> Option.map (fun id -> Fmt.str "/alt/job/%s" id) in
     update, url
   in
   let dotfile = Fmt.to_to_string (Current.Analysis.pp_dot ~env ~collapse_link ~job_info) a in
@@ -36,7 +36,8 @@ let r ~engine = object
     render_svg ctx (Current.Engine.pipeline engine) >>= function
     | Ok body ->
       let headers = Cohttp.Header.init_with "Content-Type" "image/svg+xml" in
-      Utils.Server.respond_string ~status:`OK ~headers ~body ()
+      Utils.Server.respond_string ~status:`OK ~headers ~body () >|= fun r ->
+      `Response r
     | Error (`Msg msg) ->
       Context.respond_error ctx `Internal_server_error msg
 end

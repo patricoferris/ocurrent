@@ -4,8 +4,8 @@ module Sess = struct
 end
 
 class type ['site] raw = object
-  method get_raw : 'site -> Cohttp.Request.t -> (Cohttp.Response.t * Cohttp_lwt.Body.t) Lwt.t
-  method post_raw : 'site -> Cohttp.Request.t -> Cohttp_lwt.Body.t -> (Cohttp.Response.t * Cohttp_lwt.Body.t) Lwt.t
+  method get_raw : 'site -> Cohttp.Request.t -> Cohttp_lwt_unix.Server.response_action Lwt.t
+  method post_raw : 'site -> Cohttp.Request.t -> Cohttp_lwt.Body.t -> Cohttp_lwt_unix.Server.response_action Lwt.t
   method nav_link : string option
 end
 

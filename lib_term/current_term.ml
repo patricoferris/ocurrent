@@ -1,4 +1,5 @@
 module S = S
+module type Node = Node.S
 module Output = Output
 
 module Make (Metadata : sig type t end) = struct

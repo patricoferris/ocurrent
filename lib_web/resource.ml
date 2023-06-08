@@ -2,7 +2,7 @@ open Lwt.Infix
 
 let () = Mirage_crypto_rng_unix.initialize (module Mirage_crypto_rng.Fortuna)
 
-let forbidden (ctx : Context.t) =
+let forbidden (ctx : Context.t) : Utils.Server.response_action Lwt.t =
   match ctx.site.authn, ctx.user with
   | None, _          (* Site doesn't allow logins! *)
   | _, Some _ ->     (* User is already logged in. *)
@@ -109,7 +109,8 @@ let static ~content_type ?(max_age=86400) body = object
           ("Cache-Control", Printf.sprintf "public, max-age=%d;" max_age);
         ]
     in
-    Utils.Server.respond_string ~status:`OK ~headers ~body ()
+    Utils.Server.respond_string ~status:`OK ~headers ~body () >|= fun r ->
+    `Response r
   end
 
 (* Serve a static asset from a resource embedded with ocaml-crunch,
@@ -122,7 +123,7 @@ let crunch ?content_type ?(max_age=86400) _ = object
   method! private get ctx =
     let path = Context.uri ctx |> Uri.path in
     match Static.read path with
-    | None -> Utils.Server.respond_not_found ()
+    | None -> Utils.Server.respond_not_found () >|= fun r -> `Response r
     | Some body ->
       let content_type = Option.value ~default:(Magic_mime.lookup path) content_type in
       let headers =
@@ -131,5 +132,6 @@ let crunch ?content_type ?(max_age=86400) _ = object
             ("Cache-Control", Printf.sprintf "public, max-age=%d;" max_age);
           ]
       in
-      Utils.Server.respond_string ~status:`OK ~headers ~body ()
+      Utils.Server.respond_string ~status:`OK ~headers ~body () >|= fun r ->
+      `Response r
 end
