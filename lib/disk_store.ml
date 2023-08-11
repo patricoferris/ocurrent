@@ -1,4 +1,8 @@
-let state_dir_root = Fpath.v @@ Filename.concat (Sys.getcwd ()) "var"
+let state_dir_root = 
+  match Sys.getenv_opt "CURRENT_DIR_PREFIX" with
+  | Some dir ->
+    Fpath.v @@ Filename.concat dir "var"
+  | None -> failwith "Must set CURRENT_DIR_PREFIX in the environment"
 
 let state_dir name =
   let name = Fpath.v name in
